@@ -1,8 +1,17 @@
-export type LyricStyleId = 'constellation' | 'branches' | 'web' | 'liquid' | 'codestyle';
+export type LyricStyleId =
+  | 'constellation'
+  | 'branches'
+  | 'web'
+  | 'kinetic'
+  | 'liquid'
+  | 'editorial'
+  | 'codestyle';
 
 export type EdgeStyleId = 'lumn_vivid' | 'laser_orbit' | 'breathing_aura' | 'off';
 
 export type AmbientParticleId = 'cosmos' | 'rain' | 'embers' | 'none';
+
+export type EqPresetId = 'flat' | 'bass_boost' | 'late_night' | 'vocal_clarity' | 'concert';
 
 export interface LyricWord {
   text: string;
@@ -25,7 +34,7 @@ export interface SongItem {
   duration: number;
   artworkUrl: string;
   audioUrl: string;
-  source: 'saavn' | 'itunes' | 'local';
+  source: 'saavn' | 'itunes' | 'local' | 'live_tab' | 'live_mic';
   isFullTrack: boolean;
   year?: string;
   playCount?: number;
@@ -37,15 +46,28 @@ export interface VibePalette {
   accent: string;
 }
 
-export interface VibeBlueprint {
-  moodName: string;
-  archetype: string;
-  directorNote: string;
-  source: 'auto_ai' | 'gemini_4' | 'prompt_ai';
+export interface VibePreset {
+  id: string;
+  name: string;
+  tag: string;
+  description: string;
   palette: VibePalette;
   lyricStyle: LyricStyleId;
   edgeStyle: EdgeStyleId;
   particles: AmbientParticleId;
+  showSpectrum: boolean;
+}
+
+export interface VibeBlueprint {
+  moodName: string;
+  archetype: string;
+  directorNote: string;
+  source: 'auto_ai' | 'gemini_4' | 'prompt_ai' | 'preset';
+  palette: VibePalette;
+  lyricStyle: LyricStyleId;
+  edgeStyle: EdgeStyleId;
+  particles: AmbientParticleId;
+  showSpectrum: boolean;
 }
 
 export interface CompanionSyncMessage {

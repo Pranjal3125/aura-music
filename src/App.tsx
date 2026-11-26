@@ -18,28 +18,41 @@ import {
   Music2,
   Upload,
   EyeOff,
+  ListMusic,
+  Sliders,
+  Timer,
+  Video,
+  MonitorPlay,
+  Mic,
+  Minus,
+  Plus,
 } from 'lucide-react';
 import {
   AmbientParticleId,
   CompanionSyncMessage,
   EdgeStyleId,
+  EqPresetId,
   LyricLine,
   LyricStyleId,
   SongItem,
   VibeBlueprint,
 } from './types';
+import { EQ_PRESETS, VIBE_PRESETS } from './data/presets';
 import {
+  detectChorusStartTime,
   extractPaletteFromArtwork,
   fetchSyncedLyricsForSong,
   loadFeaturedSongs,
   parseLocalFileName,
 } from './services/musicApi';
 import { LightAudioEngine } from './engine/lightAudioEngine';
-import { directSongAutonomously, directSongWithGemini } from './engine/vibeBrain';
+import { directSongAutonomously, directSongWithGemini, presetToBlueprint } from './engine/vibeBrain';
 import { SearchBar } from './components/SearchBar';
 import { LyricsStage } from './components/LyricsStage';
 import { AmbientParticles } from './components/AmbientParticles';
 import { CompanionScreen } from './components/CompanionScreen';
+import { LyricsTimelineDrawer } from './components/LyricsTimelineDrawer';
+import { SpectrumHorizon } from './components/SpectrumHorizon';
 
 function fmtTime(sec: number): string {
   if (!isFinite(sec) || sec < 0) return '0:00';
@@ -61,22 +74,15 @@ function rgbToHex(rgb: [number, number, number]): string {
   return '#' + [clamp(rgb[0]), clamp(rgb[1]), clamp(rgb[2])].map((x) => x.toString(16).padStart(2, '0')).join('');
 }
 
-const DEFAULT_BLUEPRINT: VibeBlueprint = {
-  moodName: 'Crimson Nocturne',
-  archetype: 'OLED COSMOS',
-  directorNote: 'Search any song — AI automatically matches lighting, palette & living constellation lyrics.',
-  source: 'auto_ai',
-  palette: { primary: '#ff1e42', secondary: '#ff8a00', accent: '#fff4de' },
-  lyricStyle: 'constellation',
-  edgeStyle: 'lumn_vivid',
-  particles: 'cosmos',
-};
+const DEFAULT_BLUEPRINT: VibeBlueprint = presetToBlueprint(VIBE_PRESETS[0]);
 
 const LYRIC_STYLES: Array<{ id: LyricStyleId; label: string }> = [
   { id: 'constellation', label: 'Constellation' },
   { id: 'branches', label: 'Branches' },
   { id: 'web', label: 'Web' },
+  { id: 'kinetic', label: 'Kinetic' },
   { id: 'liquid', label: 'Liquid' },
+  { id: 'editorial', label: 'Serif' },
   { id: 'codestyle', label: 'Code' },
 ];
 
@@ -113,6 +119,7 @@ const AuraStage: React.FC = () => {
   const [duration, setDuration] = useState(0);
   const [volume, setVolume] = useState(0.85);
   const [muted, setMuted] = useState(false);
+  const [eqPreset, setEqPreset] = useState<EqPresetId>('flat');
 
   const [lyrics, setLyrics] = useState<LyricLine[]>([]);
   const [lyricsLoading, setLyricsLoading] = useState(false);
@@ -121,13 +128,21 @@ const AuraStage: React.FC = () => {
   const [lyricOffset, setLyricOffset] = useState(0);
 
   const [blueprint, setBlueprint] = useState<VibeBlueprint>(DEFAULT_BLUEPRINT);
+  const [activePresetId, setActivePresetId] = useState<string>('starboy-noir');
   const [geminiKey, setGeminiKey] = useState(() => localStorage.getItem('aura_gemini_key') || '');
   const [keyDraft, setKeyDraft] = useState(() => localStorage.getItem('aura_gemini_key') || '');
   const [keySaved, setKeySaved] = useState(false);
   const [isDirecting, setIsDirecting] = useState(false);
   const [vibePanelOpen, setVibePanelOpen] = useState(false);
+  const [lyricsDrawerOpen, setLyricsDrawerOpen] = useState(false);
   const [promptInput, setPromptInput] = useState('');
   const [toast, setToast] = useState<string | null>(null);
+
+  // Ambient Focus 25m Timer
+  const [focusRemaining, setFocusRemaining] = useState<number | null>(null);
+
+  // 1-Click 10s Reel Clip Recorder
+  const [recordingSec, setRecordingSec] = useState<number | null>(null);
 
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [chromeVisible, setChromeVisible] = useState(true);
@@ -135,12 +150,16 @@ const AuraStage: React.FC = () => {
   const [searchOpen, setSearchOpen] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
 
-  // Zero-lag direct DOM + canvas refs (ZERO React re-renders per frame!)
   const rootRef = useRef<HTMLDivElement | null>(null);
   const seekFillRef = useRef<HTMLDivElement | null>(null);
   const timeLabelRef = useRef<HTMLSpanElement | null>(null);
   const audioRef = useRef<LightAudioEngine | null>(null);
-  const audioPulseRef = useRef({ bass: 0.1, beat: 0, mid: 0.1 });
+  const audioPulseRef = useRef({
+    bass: 0.1,
+    beat: 0,
+    mid: 0.1,
+    spectrum: new Float32Array(32),
+  });
   const channelRef = useRef<BroadcastChannel | null>(null);
   const hideTimerRef = useRef<number | null>(null);
 
@@ -152,6 +171,8 @@ const AuraStage: React.FC = () => {
     activeSong,
     blueprint,
     isPlaying,
+    queue,
+    featured,
   });
   rafStateRef.current = {
     lyrics,
@@ -161,13 +182,15 @@ const AuraStage: React.FC = () => {
     activeSong,
     blueprint,
     isPlaying,
+    queue,
+    featured,
   };
 
   const showToast = useCallback((msg: string) => {
     setToast(msg);
     window.setTimeout(() => {
       setToast((cur) => (cur === msg ? null : cur));
-    }, 3200);
+    }, 3400);
   }, []);
 
   useEffect(() => {
@@ -182,6 +205,33 @@ const AuraStage: React.FC = () => {
     };
   }, []);
 
+  // Focus 25m Timer interval
+  useEffect(() => {
+    if (focusRemaining === null) return;
+    const id = window.setInterval(() => {
+      setFocusRemaining((prev) => {
+        if (prev === null) return null;
+        if (prev <= 1) {
+          showToast('25-minute Focus Session Complete!');
+          return null;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+    return () => window.clearInterval(id);
+  }, [focusRemaining !== null, showToast]);
+
+  const applyPreset = useCallback(
+    (presetId: string) => {
+      const preset = VIBE_PRESETS.find((p) => p.id === presetId);
+      if (!preset) return;
+      setActivePresetId(preset.id);
+      setBlueprint(presetToBlueprint(preset));
+      showToast(`Preset: ${preset.name}`);
+    },
+    [showToast]
+  );
+
   const playSong = useCallback(
     async (song: SongItem, newQueue?: SongItem[]) => {
       if (newQueue && newQueue.length > 0) setQueue(newQueue);
@@ -194,6 +244,7 @@ const AuraStage: React.FC = () => {
       setActiveWordIdx(-1);
       setLyricsLoading(true);
       setLyricOffset(0);
+      setActivePresetId('');
 
       const engine = audioRef.current;
       if (engine) {
@@ -212,9 +263,10 @@ const AuraStage: React.FC = () => {
       setLyrics(fetchedLyrics);
       setLyricsLoading(false);
 
+      // For 30s Apple Previews, align onto the most repeated chorus hook timestamp!
       if (!song.isFullTrack && fetchedLyrics.length > 6) {
-        const chorusApprox = Math.round(fetchedLyrics[Math.floor(fetchedLyrics.length * 0.3)].start);
-        setLyricOffset(chorusApprox);
+        const chorusStart = detectChorusStartTime(fetchedLyrics);
+        setLyricOffset(chorusStart);
       }
 
       const autoBp = directSongAutonomously({
@@ -255,6 +307,9 @@ const AuraStage: React.FC = () => {
     [queue, featured, activeSong, playSong]
   );
 
+  const playSongRef = useRef(playSong);
+  playSongRef.current = playSong;
+
   const handleLocalFile = useCallback(
     (file: File) => {
       const url = URL.createObjectURL(file);
@@ -276,12 +331,52 @@ const AuraStage: React.FC = () => {
     [playSong, queue, showToast]
   );
 
-  // Unified 120fps zero-lag rAF loop: smooth RGB morphing + silky GPU edge alpha + lyric indexing
+  const handleStartLiveAudio = useCallback(
+    async (kind: 'tab' | 'mic') => {
+      const engine = audioRef.current;
+      if (!engine) return;
+      try {
+        if (kind === 'tab') await engine.startTabCapture();
+        else await engine.startMicCapture();
+
+        const liveItem: SongItem = {
+          id: `live-${kind}-${Date.now()}`,
+          title: kind === 'tab' ? 'Live Tab Audio' : 'Room Microphone',
+          artist: kind === 'tab' ? 'Spotify / YouTube Stream' : 'Ambient Audio Capture',
+          album: 'Real-Time DSP',
+          duration: 0,
+          artworkUrl: '',
+          audioUrl: '',
+          source: kind === 'tab' ? 'live_tab' : 'live_mic',
+          isFullTrack: true,
+        };
+        setActiveSong(liveItem);
+        setLyrics([]);
+        setIsPlaying(true);
+        setBlueprint((b) => ({ ...b, showSpectrum: true }));
+        showToast(kind === 'tab' ? 'Live Tab Audio connected!' : 'Room Mic active!');
+      } catch (err) {
+        showToast(err instanceof Error ? err.message : 'Capture cancelled.');
+      }
+    },
+    [showToast]
+  );
+
+  // Unified 120fps rAF loop
   useEffect(() => {
     const engine = new LightAudioEngine();
     audioRef.current = engine;
     engine.onPlayStateChange = (playing) => setIsPlaying(playing);
     engine.onDurationChange = (dur) => setDuration(dur);
+    engine.onEnded = () => {
+      const st = rafStateRef.current;
+      const list = st.queue.length > 0 ? st.queue : st.featured;
+      if (st.activeSong && st.activeSong.isFullTrack && list.length > 1) {
+        const idx = list.findIndex((s) => s.id === st.activeSong!.id);
+        const nextIdx = idx < 0 ? 0 : (idx + 1) % list.length;
+        void playSongRef.current(list[nextIdx], list);
+      }
+    };
 
     const channel = new BroadcastChannel('aura-vibe-sync');
     channelRef.current = channel;
@@ -303,20 +398,19 @@ const AuraStage: React.FC = () => {
       const s = rafStateRef.current;
       const rawPulse = engine.samplePulse();
 
-      // Double-smoothed silky envelope for velvet-smooth edge lighting!
       const atk = 1 - Math.exp(-16 * dt);
       const rel = 1 - Math.exp(-4.2 * dt);
       const ap = audioPulseRef.current;
       ap.bass += (rawPulse.bass - ap.bass) * (rawPulse.bass > ap.bass ? atk : rel);
       ap.beat += (rawPulse.beat - ap.beat) * (rawPulse.beat > ap.beat ? atk : rel);
       ap.mid += (rawPulse.mid - ap.mid) * (rawPulse.mid > ap.mid ? atk : rel);
+      ap.spectrum = rawPulse.spectrum;
 
       const targetGlow = Math.min(1, 0.28 + ap.bass * 0.58 + ap.beat * 0.32);
       const targetPulse = Math.min(0.96, 0.18 + ap.bass * 0.55 + ap.beat * 0.42);
       smoothGlowAlpha += (targetGlow - smoothGlowAlpha) * (1 - Math.exp(-8 * dt));
       smoothPulseAlpha += (targetPulse - smoothPulseAlpha) * (1 - Math.exp(-9 * dt));
 
-      // Smoothly morph edge glow colors on song/mood switch (throttled ~30fps for zero style recalc overhead!)
       const root = rootRef.current;
       if (root) {
         root.style.setProperty('--aura-glow-alpha', smoothGlowAlpha.toFixed(3));
@@ -355,12 +449,11 @@ const AuraStage: React.FC = () => {
         timeLabelRef.current.textContent = fmtTime(curSec);
       }
 
-      // Lyric index tracking — ONLY triggers React state when line or word actually advances!
       if (s.lyrics.length > 0) {
         const lyricTime = curSec + s.lyricOffset;
         let lineIdx = -1;
         for (let i = 0; i < s.lyrics.length; i++) {
-          if (lyricTime >= s.lyrics[i].start - 0.12 && lyricTime <= s.lyrics[i].end + 0.25) {
+          if (lyricTime >= s.lyrics[i].start - 0.1 && lyricTime <= s.lyrics[i].end + 0.22) {
             lineIdx = i;
             break;
           }
@@ -368,7 +461,7 @@ const AuraStage: React.FC = () => {
         if (lineIdx === -1) {
           for (let i = s.lyrics.length - 1; i >= 0; i--) {
             if (lyricTime >= s.lyrics[i].start) {
-              if (lyricTime - s.lyrics[i].end < 2.2) lineIdx = i;
+              if (lyricTime - s.lyrics[i].end < 2.0) lineIdx = i;
               break;
             }
           }
@@ -387,7 +480,6 @@ const AuraStage: React.FC = () => {
         if (wordIdx !== s.activeWordIdx) setActiveWordIdx(wordIdx);
       }
 
-      // Companion Dual-Screen Sync
       if (s.activeSong && now - lastCompanionMs > 60) {
         lastCompanionMs = now;
         const msg: CompanionSyncMessage = {
@@ -420,11 +512,88 @@ const AuraStage: React.FC = () => {
     };
   }, []);
 
+  // Record 10s Reel Clip directly from live Canvas + Edge Glow!
+  const handleRecordClip = useCallback(() => {
+    if (recordingSec !== null) return;
+    const canvasEl = document.querySelector('canvas') as HTMLCanvasElement | null;
+    if (!canvasEl) {
+      showToast('Switch to Constellation, Branches, or Web mode to record a 10s clip.');
+      return;
+    }
+
+    const w = Math.min(1280, window.innerWidth);
+    const h = Math.min(720, window.innerHeight);
+    const comp = document.createElement('canvas');
+    comp.width = w;
+    comp.height = h;
+    const ctx = comp.getContext('2d');
+    if (!ctx) return;
+
+    const stream = comp.captureStream(30);
+    const mime = MediaRecorder.isTypeSupported('video/webm;codecs=vp9') ? 'video/webm;codecs=vp9' : 'video/webm';
+    const rec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 5_500_000 });
+    const chunks: BlobPart[] = [];
+    rec.ondataavailable = (ev) => {
+      if (ev.data.size > 0) chunks.push(ev.data);
+    };
+
+    let active = true;
+    const pump = () => {
+      if (!active) return;
+      ctx.fillStyle = '#000000';
+      ctx.fillRect(0, 0, w, h);
+      const curCanvas = document.querySelector('canvas') as HTMLCanvasElement | null;
+      if (curCanvas) ctx.drawImage(curCanvas, 0, 0, w, h);
+
+      // Composite matching Lumn neon edge rim onto recording
+      const p = rafStateRef.current.blueprint.palette.primary;
+      const gAlpha = Math.min(0.9, 0.35 + audioPulseRef.current.bass * 0.55);
+      ctx.save();
+      ctx.strokeStyle = p;
+      ctx.globalAlpha = gAlpha;
+      ctx.lineWidth = 6;
+      ctx.shadowColor = p;
+      ctx.shadowBlur = 32;
+      ctx.strokeRect(2, 2, w - 4, h - 4);
+      ctx.restore();
+
+      requestAnimationFrame(pump);
+    };
+    pump();
+
+    rec.onstop = () => {
+      active = false;
+      const blob = new Blob(chunks, { type: mime });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `aura-${(activeSong?.title || 'clip').toLowerCase().replace(/[^a-z0-9]+/g, '-')}.webm`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 4000);
+      setRecordingSec(null);
+      showToast('Saved 10s Reel Clip (.webm)!');
+    };
+
+    rec.start();
+    setRecordingSec(10);
+    let left = 10;
+    const iv = window.setInterval(() => {
+      left--;
+      if (left <= 0) {
+        window.clearInterval(iv);
+        if (rec.state !== 'inactive') rec.stop();
+      } else {
+        setRecordingSec(left);
+      }
+    }, 1000);
+  }, [recordingSec, activeSong?.title, showToast]);
+
   const handlePromptSteer = async (e: React.FormEvent) => {
     e.preventDefault();
     const text = promptInput.trim();
     if (!text || !activeSong) return;
     setPromptInput('');
+    setActivePresetId('');
 
     const instant = directSongAutonomously({
       song: activeSong,
@@ -455,30 +624,29 @@ const AuraStage: React.FC = () => {
     }
   };
 
-  // Auto-hide HUD cleanly after 3.2s idle during playback for Pure Dark-Room Cinema!
   const wakeChrome = useCallback(() => {
     if (pureCinema) return;
     setChromeVisible(true);
     if (hideTimerRef.current) window.clearTimeout(hideTimerRef.current);
-    if (activeSong && isPlaying && !vibePanelOpen && !searchOpen) {
+    if (activeSong && isPlaying && !vibePanelOpen && !lyricsDrawerOpen && !searchOpen) {
       hideTimerRef.current = window.setTimeout(() => {
         setChromeVisible(false);
-      }, 3400);
+      }, 3600);
     }
-  }, [activeSong, isPlaying, vibePanelOpen, searchOpen, pureCinema]);
+  }, [activeSong, isPlaying, vibePanelOpen, lyricsDrawerOpen, searchOpen, pureCinema]);
 
   useEffect(() => {
     if (pureCinema) {
       setChromeVisible(false);
       return;
     }
-    if (!activeSong || !isPlaying || vibePanelOpen || searchOpen) {
+    if (!activeSong || !isPlaying || vibePanelOpen || lyricsDrawerOpen || searchOpen) {
       setChromeVisible(true);
       if (hideTimerRef.current) window.clearTimeout(hideTimerRef.current);
     } else {
       wakeChrome();
     }
-  }, [activeSong, isPlaying, vibePanelOpen, searchOpen, pureCinema, wakeChrome]);
+  }, [activeSong, isPlaying, vibePanelOpen, lyricsDrawerOpen, searchOpen, pureCinema, wakeChrome]);
 
   const toggleFullscreen = useCallback(() => {
     if (!document.fullscreenElement) void document.documentElement.requestFullscreen?.();
@@ -512,6 +680,8 @@ const AuraStage: React.FC = () => {
         openCompanion();
       } else if (e.key === 'h' || e.key === 'H') {
         setPureCinema((v) => !v);
+      } else if (e.key === 'l' || e.key === 'L') {
+        setLyricsDrawerOpen((v) => !v);
       } else if (e.key === 'Escape' && pureCinema) {
         setPureCinema(false);
       }
@@ -525,7 +695,11 @@ const AuraStage: React.FC = () => {
     activeSong &&
     lyrics.length > 0 &&
     activeLineIdx >= 0 &&
+    activeSong.source !== 'live_tab' &&
+    activeSong.source !== 'live_mic' &&
     (blueprint.lyricStyle === 'constellation' || blueprint.lyricStyle === 'branches' || blueprint.lyricStyle === 'web');
+
+  const focusPct = focusRemaining !== null ? ((1500 - focusRemaining) / 1500) * 100 : 0;
 
   return (
     <div
@@ -552,7 +726,16 @@ const AuraStage: React.FC = () => {
       {/* Pure OLED Center Ambient Wash */}
       <div className="aura-oled-backdrop" />
 
-      {/* Lightweight Ambient Particles on Home / Liquid / Code views (CosmosCanvas renders its own 3D parallax starfield!) */}
+      {/* 25-Min Focus Mode Ultra-Minimal Top Bezel Progress Line */}
+      {focusRemaining !== null && (
+        <div className="fixed top-0 left-0 right-0 h-[2px] z-40 bg-white/10">
+          <div
+            className="h-full transition-all duration-1000"
+            style={{ width: `${focusPct}%`, backgroundColor: primary, boxShadow: `0 0 12px ${primary}` }}
+          />
+        </div>
+      )}
+
       {!usesCanvasStars && (
         <AmbientParticles
           mode={blueprint.particles === 'cosmos' ? 'stars' : blueprint.particles}
@@ -596,11 +779,11 @@ const AuraStage: React.FC = () => {
       )}
 
       {/* ====================================================================
-          HOME SCREEN — CLEAN SPOTLIGHT SONG SEARCH + INSTANT REAL TRACKS
+          HOME SCREEN — SPOTLIGHT SONG SEARCH + LIVE TAB/MIC + PLAY INSTANTLY
           ==================================================================== */}
       {!activeSong && (
         <div className="relative z-20 w-full h-full flex flex-col items-center justify-center px-5 py-10 overflow-y-auto">
-          <div className="flex flex-col items-center text-center mb-7">
+          <div className="flex flex-col items-center text-center mb-6">
             <div className="flex items-center gap-2.5 mb-2">
               <span
                 className="w-2.5 h-2.5 rounded-full"
@@ -609,23 +792,56 @@ const AuraStage: React.FC = () => {
               <span className="font-display text-2xl sm:text-3xl font-bold tracking-[0.28em]">AURA</span>
             </div>
             <p className="text-xs sm:text-sm text-white/50 max-w-md">
-              Search any song — gliding constellation lyrics, neural branches &amp; music-synced OLED edge glow.
+              Search any song — gliding constellation lyrics, neural branches &amp; music-synced OLED edge lighting.
             </p>
           </div>
 
           <SearchBar
             accentColor={primary}
             onSelectSong={(song, list) => void playSong(song, list)}
+            onAddToQueue={(song) => {
+              setQueue((q) => [...q, song]);
+              showToast(`Queued "${song.title}"`);
+            }}
             onUploadLocalFile={handleLocalFile}
             onDropdownToggle={setSearchOpen}
           />
 
-          <div className="w-[min(92vw,760px)] mt-9">
+          {/* Quick Source Pills: YT / Spotify Tab Capture, Room Mic, Tagde Presets */}
+          <div className="flex flex-wrap items-center justify-center gap-2 mt-4">
+            <button
+              type="button"
+              onClick={() => void handleStartLiveAudio('tab')}
+              className="oled-pill px-3.5 py-1.5 rounded-full text-xs text-white/75 hover:text-white flex items-center gap-1.5 cursor-pointer"
+            >
+              <MonitorPlay className="w-3.5 h-3.5 text-emerald-400" />
+              <span>Sync YT / Spotify Tab</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => void handleStartLiveAudio('mic')}
+              className="oled-pill px-3.5 py-1.5 rounded-full text-xs text-white/75 hover:text-white flex items-center gap-1.5 cursor-pointer"
+            >
+              <Mic className="w-3.5 h-3.5 text-sky-400" />
+              <span>Room Mic Mode</span>
+            </button>
+            <button
+              type="button"
+              onClick={openCompanion}
+              className="oled-pill px-3.5 py-1.5 rounded-full text-xs text-white/75 hover:text-white flex items-center gap-1.5 cursor-pointer"
+            >
+              <MonitorSmartphone className="w-3.5 h-3.5" style={{ color: primary }} />
+              <span>Dual-Screen Companion</span>
+            </button>
+          </div>
+
+          {/* Curated Play Instantly Grid */}
+          <div className="w-[min(92vw,780px)] mt-8">
             <div className="flex items-center justify-between mb-3 px-1">
               <span className="text-[11px] font-mono-code uppercase tracking-widest text-white/40">
                 Play Instantly
               </span>
-              <span className="text-[11px] text-white/35">Or drop any MP3 anywhere</span>
+              <span className="text-[11px] text-white/35">Or drag &amp; drop any MP3</span>
             </div>
 
             {featuredLoading ? (
@@ -645,7 +861,12 @@ const AuraStage: React.FC = () => {
                   >
                     <div className="relative w-11 h-11 rounded-xl overflow-hidden bg-zinc-900 shrink-0">
                       {song.artworkUrl ? (
-                        <img src={song.artworkUrl} alt={song.title} className="w-full h-full object-cover" />
+                        <img
+                          src={song.artworkUrl}
+                          alt={song.title}
+                          loading="eager"
+                          className="w-full h-full object-cover"
+                        />
                       ) : (
                         <Music2 className="w-4 h-4 m-auto text-white/30" />
                       )}
@@ -666,7 +887,7 @@ const AuraStage: React.FC = () => {
       )}
 
       {/* ====================================================================
-          PLAYING STAGE — FULLSCREEN CINEMA COSMOS + AUTO-HIDE CHROME
+          PLAYING STAGE — 120FPS VISUAL WORLDS + PRESETS + STUDIO EQ
           ==================================================================== */}
       {activeSong && (
         <>
@@ -684,6 +905,7 @@ const AuraStage: React.FC = () => {
                 audioRef.current?.pause();
                 setActiveSong(null);
                 setVibePanelOpen(false);
+                setLyricsDrawerOpen(false);
               }}
               className="flex items-center gap-2 px-3 py-1.5 rounded-full hover:bg-white/[0.06] transition-colors cursor-pointer shrink-0"
               title="Back to Home"
@@ -699,6 +921,10 @@ const AuraStage: React.FC = () => {
               compact
               accentColor={primary}
               onSelectSong={(song, list) => void playSong(song, list)}
+              onAddToQueue={(song) => {
+                setQueue((q) => [...q, song]);
+                showToast(`Added "${song.title}" to Queue`);
+              }}
               onUploadLocalFile={handleLocalFile}
               onDropdownToggle={setSearchOpen}
             />
@@ -712,21 +938,22 @@ const AuraStage: React.FC = () => {
               {isDirecting ? (
                 <Loader2 className="w-3.5 h-3.5 animate-spin" style={{ color: primary }} />
               ) : (
-                <Sparkles className="w-3.5 h-3.5" style={{ color: primary }} />
+                <Sliders className="w-3.5 h-3.5" style={{ color: primary }} />
               )}
-              <span className="hidden md:inline font-grotesk font-medium text-white/90 max-w-[130px] truncate">
+              <span className="hidden md:inline font-grotesk font-medium text-white/90 max-w-[140px] truncate">
                 {blueprint.moodName}
               </span>
             </button>
           </div>
 
-          {/* Sleek Popover AI Vibe & Gemini Controls */}
+          {/* Right Pro Studio Drawer: 10 Tagde Presets + AI Steer + EQ + Visuals + Focus + Gemini */}
           {vibePanelOpen && !pureCinema && (
-            <div className="fixed top-20 right-5 z-40 w-[min(92vw,360px)] oled-surface rounded-3xl p-4 space-y-4">
+            <div className="fixed top-20 bottom-28 right-5 z-40 w-[min(92vw,390px)] oled-surface rounded-3xl p-4 overflow-y-auto space-y-5">
+              {/* Header */}
               <div className="flex items-center justify-between">
                 <div>
                   <div className="text-[10px] font-mono-code uppercase tracking-widest text-white/45">
-                    {blueprint.source === 'gemini_4' ? 'GEMINI 4 DIRECTED' : 'AI VIBE DIRECTOR'}
+                    {blueprint.source === 'gemini_4' ? 'GEMINI 4 DIRECTED' : 'AURA STUDIO & PRESETS'}
                   </div>
                   <div className="text-sm font-grotesk font-semibold text-white">{blueprint.moodName}</div>
                 </div>
@@ -739,95 +966,187 @@ const AuraStage: React.FC = () => {
                 </button>
               </div>
 
-              <p className="text-[11px] text-white/55 leading-relaxed">{blueprint.directorNote}</p>
-
-              <form onSubmit={handlePromptSteer} className="flex items-center gap-1.5">
-                <div className="flex-1 min-w-0 flex items-center gap-2 rounded-xl bg-white/[0.06] border border-white/[0.1] px-2.5 py-1.5">
-                  <Wand2 className="w-3.5 h-3.5 text-white/45 shrink-0" />
-                  <input
-                    type="text"
-                    value={promptInput}
-                    onChange={(e) => setPromptInput(e.target.value)}
-                    placeholder='e.g. "crimson starboy" or "rainy branches"'
-                    className="flex-1 min-w-0 bg-transparent text-xs text-white placeholder:text-white/35 outline-none"
-                  />
+              {/* 10 Signature Tagde Presets */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] font-mono-code uppercase tracking-widest text-white/45">
+                    Signature Presets (10)
+                  </span>
+                  <span className="text-[10px] text-white/35">1-Click Room Transform</span>
                 </div>
-                <button
-                  type="submit"
-                  disabled={!promptInput.trim() || isDirecting}
-                  className="px-3 py-1.5 rounded-xl text-xs font-semibold text-black disabled:opacity-40 cursor-pointer shrink-0"
-                  style={{ backgroundColor: primary }}
-                >
-                  Apply
-                </button>
+                <div className="grid grid-cols-2 gap-1.5">
+                  {VIBE_PRESETS.map((p) => {
+                    const active = activePresetId === p.id;
+                    return (
+                      <button
+                        key={p.id}
+                        type="button"
+                        onClick={() => applyPreset(p.id)}
+                        className={`p-2 rounded-2xl text-left border transition-all cursor-pointer flex items-center gap-2.5 ${
+                          active
+                            ? 'bg-white/[0.12] border-white/35'
+                            : 'bg-white/[0.035] hover:bg-white/[0.08] border-white/[0.06]'
+                        }`}
+                      >
+                        <span
+                          className="w-5 h-5 rounded-full shrink-0 border border-white/25"
+                          style={{
+                            background: `linear-gradient(135deg, ${p.palette.primary}, ${p.palette.secondary})`,
+                            boxShadow: active ? `0 0 12px ${p.palette.primary}` : 'none',
+                          }}
+                        />
+                        <div className="min-w-0">
+                          <div className="text-[11px] font-semibold text-white truncate">{p.name}</div>
+                          <div className="text-[9px] font-mono-code text-white/40 truncate">{p.tag}</div>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* AI Prompt Steer */}
+              <form onSubmit={handlePromptSteer} className="space-y-1.5">
+                <div className="text-[10px] font-mono-code uppercase tracking-widest text-white/45">
+                  Steer AI Vibe
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <div className="flex-1 min-w-0 flex items-center gap-2 rounded-xl bg-white/[0.06] border border-white/[0.1] px-2.5 py-1.5">
+                    <Wand2 className="w-3.5 h-3.5 text-white/45 shrink-0" />
+                    <input
+                      type="text"
+                      value={promptInput}
+                      onChange={(e) => setPromptInput(e.target.value)}
+                      placeholder='e.g. "cyber samurai" or "monsoon blue"'
+                      className="flex-1 min-w-0 bg-transparent text-xs text-white placeholder:text-white/35 outline-none"
+                    />
+                  </div>
+                  <button
+                    type="submit"
+                    disabled={!promptInput.trim() || isDirecting}
+                    className="px-3 py-1.5 rounded-xl text-xs font-semibold text-black disabled:opacity-40 cursor-pointer shrink-0"
+                    style={{ backgroundColor: primary }}
+                  >
+                    Morph
+                  </button>
+                </div>
               </form>
 
-              <div className="space-y-1.5">
-                <div className="text-[10px] font-mono-code uppercase tracking-widest text-white/40">Visual World</div>
-                <div className="grid grid-cols-3 gap-1.5">
-                  {LYRIC_STYLES.map((opt) => (
+              {/* Visual Controls: Edge, Particles, Spectrum */}
+              <div className="space-y-3 pt-2 border-t border-white/[0.08]">
+                <div className="space-y-1.5">
+                  <div className="text-[10px] font-mono-code uppercase tracking-widest text-white/40">
+                    Edge Lighting
+                  </div>
+                  <div className="grid grid-cols-4 gap-1.5">
+                    {EDGE_STYLES.map((opt) => (
+                      <button
+                        key={opt.id}
+                        type="button"
+                        onClick={() => setBlueprint((b) => ({ ...b, edgeStyle: opt.id }))}
+                        className={`py-1.5 rounded-xl text-[11px] transition-colors cursor-pointer ${
+                          blueprint.edgeStyle === opt.id
+                            ? 'text-black font-semibold'
+                            : 'bg-white/[0.05] hover:bg-white/[0.1] text-white/75'
+                        }`}
+                        style={blueprint.edgeStyle === opt.id ? { backgroundColor: primary } : undefined}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] font-mono-code uppercase tracking-widest text-white/40">
+                      Atmosphere &amp; Spectrum
+                    </span>
                     <button
-                      key={opt.id}
                       type="button"
-                      onClick={() => setBlueprint((b) => ({ ...b, lyricStyle: opt.id }))}
-                      className={`py-1.5 px-2 rounded-xl text-xs transition-colors cursor-pointer ${
-                        blueprint.lyricStyle === opt.id
-                          ? 'text-black font-semibold'
-                          : 'bg-white/[0.05] hover:bg-white/[0.1] text-white/75'
+                      onClick={() => setBlueprint((b) => ({ ...b, showSpectrum: !b.showSpectrum }))}
+                      className={`px-2 py-0.5 rounded-full text-[10px] font-mono-code cursor-pointer transition-colors ${
+                        blueprint.showSpectrum ? 'text-black font-semibold' : 'bg-white/[0.07] text-white/60'
                       }`}
-                      style={blueprint.lyricStyle === opt.id ? { backgroundColor: primary } : undefined}
+                      style={blueprint.showSpectrum ? { backgroundColor: primary } : undefined}
                     >
-                      {opt.label}
+                      Spectrum {blueprint.showSpectrum ? 'ON' : 'OFF'}
                     </button>
-                  ))}
+                  </div>
+                  <div className="grid grid-cols-4 gap-1.5">
+                    {PARTICLE_STYLES.map((opt) => (
+                      <button
+                        key={opt.id}
+                        type="button"
+                        onClick={() => setBlueprint((b) => ({ ...b, particles: opt.id }))}
+                        className={`py-1.5 rounded-xl text-[11px] transition-colors cursor-pointer ${
+                          blueprint.particles === opt.id
+                            ? 'text-black font-semibold'
+                            : 'bg-white/[0.05] hover:bg-white/[0.1] text-white/75'
+                        }`}
+                        style={blueprint.particles === opt.id ? { backgroundColor: primary } : undefined}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               </div>
 
-              <div className="space-y-1.5">
-                <div className="text-[10px] font-mono-code uppercase tracking-widest text-white/40">Edge Lighting</div>
-                <div className="grid grid-cols-4 gap-1.5">
-                  {EDGE_STYLES.map((opt) => (
-                    <button
-                      key={opt.id}
-                      type="button"
-                      onClick={() => setBlueprint((b) => ({ ...b, edgeStyle: opt.id }))}
-                      className={`py-1.5 rounded-xl text-[11px] transition-colors cursor-pointer ${
-                        blueprint.edgeStyle === opt.id
-                          ? 'text-black font-semibold'
-                          : 'bg-white/[0.05] hover:bg-white/[0.1] text-white/75'
-                      }`}
-                      style={blueprint.edgeStyle === opt.id ? { backgroundColor: primary } : undefined}
-                    >
-                      {opt.label}
-                    </button>
-                  ))}
+              {/* Studio 3-Band Web Audio EQ */}
+              <div className="space-y-1.5 pt-2 border-t border-white/[0.08]">
+                <div className="text-[10px] font-mono-code uppercase tracking-widest text-white/45">
+                  Studio Audio EQ
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {(Object.keys(EQ_PRESETS) as EqPresetId[]).map((id) => {
+                    const active = eqPreset === id;
+                    return (
+                      <button
+                        key={id}
+                        type="button"
+                        onClick={() => {
+                          setEqPreset(id);
+                          const eq = EQ_PRESETS[id];
+                          audioRef.current?.setEq(eq.bass, eq.mid, eq.treble);
+                          showToast(`Audio EQ: ${eq.label}`);
+                        }}
+                        className={`px-2.5 py-1 rounded-xl text-[11px] transition-colors cursor-pointer ${
+                          active ? 'text-black font-semibold' : 'bg-white/[0.05] hover:bg-white/[0.1] text-white/75'
+                        }`}
+                        style={active ? { backgroundColor: primary } : undefined}
+                      >
+                        {EQ_PRESETS[id].label}
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
 
-              <div className="space-y-1.5">
-                <div className="text-[10px] font-mono-code uppercase tracking-widest text-white/40">Atmosphere</div>
-                <div className="grid grid-cols-4 gap-1.5">
-                  {PARTICLE_STYLES.map((opt) => (
-                    <button
-                      key={opt.id}
-                      type="button"
-                      onClick={() => setBlueprint((b) => ({ ...b, particles: opt.id }))}
-                      className={`py-1.5 rounded-xl text-[11px] transition-colors cursor-pointer ${
-                        blueprint.particles === opt.id
-                          ? 'text-black font-semibold'
-                          : 'bg-white/[0.05] hover:bg-white/[0.1] text-white/75'
-                      }`}
-                      style={blueprint.particles === opt.id ? { backgroundColor: primary } : undefined}
-                    >
-                      {opt.label}
-                    </button>
-                  ))}
-                </div>
+              {/* Focus Mode 25m Timer + Live Audio Inputs */}
+              <div className="grid grid-cols-2 gap-1.5 pt-2 border-t border-white/[0.08]">
+                <button
+                  type="button"
+                  onClick={() => setFocusRemaining((r) => (r === null ? 25 * 60 : null))}
+                  className="py-2 px-2.5 rounded-xl bg-white/[0.05] hover:bg-white/[0.1] text-xs flex items-center justify-center gap-1.5 cursor-pointer"
+                >
+                  <Timer className="w-3.5 h-3.5" style={{ color: primary }} />
+                  <span>{focusRemaining !== null ? `Focus ${fmtTime(focusRemaining)}` : '25m Focus'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleStartLiveAudio('tab')}
+                  className="py-2 px-2.5 rounded-xl bg-white/[0.05] hover:bg-white/[0.1] text-xs flex items-center justify-center gap-1.5 cursor-pointer"
+                >
+                  <MonitorPlay className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>YT / Spotify Tab</span>
+                </button>
               </div>
 
+              {/* Optional Gemini 4 API Key */}
               <div className="pt-2.5 border-t border-white/[0.08] space-y-2">
                 <div className="text-[10px] font-mono-code uppercase tracking-widest text-white/45 flex items-center justify-between">
-                  <span>Gemini 4 AI (Optional)</span>
+                  <span>Gemini 4 Vision AI (Optional)</span>
                   <span className="text-white/30">gemini-4-hydrogen</span>
                 </div>
                 <div className="flex items-center gap-1.5">
@@ -861,7 +1180,32 @@ const AuraStage: React.FC = () => {
             </div>
           )}
 
-          {/* Subtle Cinema Corner Whisper when HUD auto-hides (like a Mac/Verci setup!) */}
+          {/* Left Interactive Lyrics Timeline + Tap-to-Sync + Queue Drawer */}
+          <LyricsTimelineDrawer
+            open={lyricsDrawerOpen && !pureCinema}
+            onClose={() => setLyricsDrawerOpen(false)}
+            song={activeSong}
+            lyrics={lyrics}
+            activeLineIdx={activeLineIdx}
+            lyricOffset={lyricOffset}
+            currentTime={audioRef.current?.getCurrentTime() || 0}
+            accentColor={primary}
+            queue={queue}
+            onSeekToLine={(sec) => {
+              audioRef.current?.seek(sec);
+              setLyricOffset(0);
+            }}
+            onSyncLineHere={(lineStartSec) => {
+              const cur = audioRef.current?.getCurrentTime() || 0;
+              setLyricOffset(Math.round((lineStartSec - cur) * 10) / 10);
+              showToast('Synced lyrics to exact vocal!');
+            }}
+            onAdjustOffset={(d) => setLyricOffset((v) => Math.round((v + d) * 10) / 10)}
+            onResetOffset={() => setLyricOffset(0)}
+            onPlayFromQueue={(s) => void playSong(s, queue)}
+          />
+
+          {/* Subtle Cinema Corner Whisper when HUD auto-hides */}
           <div
             className={`fixed bottom-6 left-7 z-20 flex items-center gap-2.5 pointer-events-none transition-opacity duration-700 ease-apple ${
               !chromeVisible && !pureCinema ? 'opacity-65' : 'opacity-0'
@@ -880,7 +1224,7 @@ const AuraStage: React.FC = () => {
             </div>
           </div>
 
-          {/* Centerpiece: 120fps Gliding Constellation / Branches / Web / Liquid Stage */}
+          {/* Centerpiece: 7 Visual Worlds */}
           <LyricsStage
             song={activeSong}
             lyrics={lyrics}
@@ -889,21 +1233,25 @@ const AuraStage: React.FC = () => {
             activeWordIdx={activeWordIdx}
             blueprint={blueprint}
             isPlaying={isPlaying}
-            lyricOffset={lyricOffset}
-            onAdjustOffset={(delta) => setLyricOffset((v) => v + delta)}
             audioPulseRef={audioPulseRef}
-            pureCinema={pureCinema}
           />
 
-          {/* Floating Minimal Bottom Dock with 1-Click Visual World Pills */}
+          {/* Universal 120fps Mirrored Horizon Spectrum across ALL 7 Visual Worlds */}
+          <SpectrumHorizon
+            visible={blueprint.showSpectrum}
+            palette={blueprint.palette}
+            audioPulseRef={audioPulseRef}
+          />
+
+          {/* Bottom Floating Dock + 7 Mode Pills */}
           <div
-            className={`fixed bottom-5 left-1/2 -translate-x-1/2 z-30 w-[min(94vw,840px)] transition-all duration-700 ease-apple ${
+            className={`fixed bottom-5 left-1/2 -translate-x-1/2 z-30 w-[min(95vw,880px)] transition-all duration-700 ease-apple ${
               chromeVisible && !pureCinema
                 ? 'opacity-100 translate-y-0'
                 : 'opacity-0 translate-y-5 pointer-events-none'
             }`}
           >
-            {/* Quick 1-click Visual Style Pills right above player */}
+            {/* 7 Clean Visual World Pills */}
             <div className="flex items-center justify-center gap-1.5 mb-2 flex-wrap">
               {LYRIC_STYLES.map((opt) => {
                 const active = blueprint.lyricStyle === opt.id;
@@ -913,15 +1261,9 @@ const AuraStage: React.FC = () => {
                     type="button"
                     onClick={() => setBlueprint((b) => ({ ...b, lyricStyle: opt.id }))}
                     className={`px-3 py-1 rounded-full text-[11px] font-grotesk transition-all duration-300 ease-apple cursor-pointer ${
-                      active
-                        ? 'text-black font-semibold'
-                        : 'oled-pill text-white/60 hover:text-white'
+                      active ? 'text-black font-semibold' : 'oled-pill text-white/65 hover:text-white'
                     }`}
-                    style={
-                      active
-                        ? { backgroundColor: primary, boxShadow: `0 0 18px ${primary}77` }
-                        : undefined
-                    }
+                    style={active ? { backgroundColor: primary, boxShadow: `0 0 18px ${primary}77` } : undefined}
                   >
                     {opt.label}
                   </button>
@@ -930,33 +1272,36 @@ const AuraStage: React.FC = () => {
             </div>
 
             <div className="oled-surface rounded-2xl px-4 py-3 flex flex-col gap-2">
-              <div className="flex items-center gap-3 text-[10px] font-mono-code text-white/45">
-                <span ref={timeLabelRef} className="w-8 text-right">
-                  0:00
-                </span>
-                <div
-                  className="flex-1 h-1.5 rounded-full bg-white/10 cursor-pointer overflow-hidden"
-                  onClick={(e) => {
-                    const rect = e.currentTarget.getBoundingClientRect();
-                    const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-                    const dur = audioRef.current?.getDuration() || duration;
-                    if (dur > 0) audioRef.current?.seek(pct * dur);
-                  }}
-                >
+              {activeSong.source !== 'live_tab' && activeSong.source !== 'live_mic' && (
+                <div className="flex items-center gap-3 text-[10px] font-mono-code text-white/45">
+                  <span ref={timeLabelRef} className="w-8 text-right">
+                    0:00
+                  </span>
                   <div
-                    ref={seekFillRef}
-                    className="h-full rounded-full"
-                    style={{
-                      width: '0%',
-                      background: `linear-gradient(90deg, ${primary}, ${blueprint.palette.accent})`,
+                    className="flex-1 h-1.5 rounded-full bg-white/10 cursor-pointer overflow-hidden"
+                    onClick={(e) => {
+                      const rect = e.currentTarget.getBoundingClientRect();
+                      const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+                      const dur = audioRef.current?.getDuration() || duration;
+                      if (dur > 0) audioRef.current?.seek(pct * dur);
                     }}
-                  />
+                  >
+                    <div
+                      ref={seekFillRef}
+                      className="h-full rounded-full"
+                      style={{
+                        width: '0%',
+                        background: `linear-gradient(90deg, ${primary}, ${blueprint.palette.accent})`,
+                      }}
+                    />
+                  </div>
+                  <span className="w-8">{fmtTime(duration)}</span>
                 </div>
-                <span className="w-8">{fmtTime(duration)}</span>
-              </div>
+              )}
 
-              <div className="flex items-center justify-between gap-3">
-                <div className="flex items-center gap-3 min-w-0 flex-1">
+              <div className="flex items-center justify-between gap-2 sm:gap-3">
+                {/* Song Thumbnail + Inline Sync Adjuster (zero overlap!) */}
+                <div className="flex items-center gap-2.5 min-w-0 flex-1">
                   <div
                     className="w-10 h-10 rounded-lg overflow-hidden bg-zinc-900 shrink-0 border border-white/10"
                     style={{ boxShadow: `0 0 16px ${primary}44` }}
@@ -970,16 +1315,38 @@ const AuraStage: React.FC = () => {
                     )}
                   </div>
                   <div className="min-w-0">
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-1.5">
                       <span className="text-sm font-medium text-white truncate">{activeSong.title}</span>
                       <span className="hidden sm:inline text-[9px] font-mono-code px-1.5 py-0.5 rounded bg-white/[0.07] text-white/55">
                         {activeSong.isFullTrack ? 'FULL' : '30s'}
                       </span>
+                      {lyrics.length > 0 && !activeSong.isFullTrack && (
+                        <div className="hidden md:flex items-center gap-0.5 ml-1 bg-white/[0.06] rounded-md px-1 py-0.5 text-[9px] font-mono-code text-white/70">
+                          <button
+                            type="button"
+                            onClick={() => setLyricOffset((v) => Math.round((v - 2) * 10) / 10)}
+                            className="hover:text-white cursor-pointer"
+                            title="Delay lyrics -2s"
+                          >
+                            <Minus className="w-2.5 h-2.5" />
+                          </button>
+                          <span className="px-1">{lyricOffset >= 0 ? `+${lyricOffset}s` : `${lyricOffset}s`}</span>
+                          <button
+                            type="button"
+                            onClick={() => setLyricOffset((v) => Math.round((v + 2) * 10) / 10)}
+                            className="hover:text-white cursor-pointer"
+                            title="Advance lyrics +2s"
+                          >
+                            <Plus className="w-2.5 h-2.5" />
+                          </button>
+                        </div>
+                      )}
                     </div>
                     <div className="text-xs text-white/50 truncate">{activeSong.artist}</div>
                   </div>
                 </div>
 
+                {/* Transport */}
                 <div className="flex items-center gap-1.5 shrink-0">
                   <button
                     type="button"
@@ -1008,8 +1375,9 @@ const AuraStage: React.FC = () => {
                   </button>
                 </div>
 
-                <div className="flex items-center justify-end gap-1.5 flex-1">
-                  <div className="hidden md:flex items-center gap-1.5 mr-1">
+                {/* Utility Buttons */}
+                <div className="flex items-center justify-end gap-1 flex-1">
+                  <div className="hidden lg:flex items-center gap-1.5 mr-1">
                     <button
                       type="button"
                       onClick={() => {
@@ -1033,9 +1401,36 @@ const AuraStage: React.FC = () => {
                         setMuted(v === 0);
                         audioRef.current?.setVolume(v);
                       }}
-                      className="aura-slider w-16"
+                      className="aura-slider w-14"
                     />
                   </div>
+
+                  <button
+                    type="button"
+                    onClick={() => setLyricsDrawerOpen((v) => !v)}
+                    className={`p-2 rounded-xl transition-colors cursor-pointer ${
+                      lyricsDrawerOpen ? 'text-black' : 'bg-white/[0.06] hover:bg-white/[0.12] text-white/75 hover:text-white'
+                    }`}
+                    style={lyricsDrawerOpen ? { backgroundColor: primary } : undefined}
+                    title="Lyrics Timeline, Tap-to-Sync & Queue (L)"
+                  >
+                    <ListMusic className="w-4 h-4" />
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleRecordClip}
+                    disabled={recordingSec !== null}
+                    className={`p-2 rounded-xl transition-colors cursor-pointer flex items-center gap-1 text-[10px] font-mono-code ${
+                      recordingSec !== null
+                        ? 'bg-red-500 text-white animate-pulse'
+                        : 'bg-white/[0.06] hover:bg-white/[0.12] text-white/75 hover:text-white'
+                    }`}
+                    title="Export 10s Reel Clip (.webm)"
+                  >
+                    <Video className="w-4 h-4" />
+                    {recordingSec !== null && <span>{recordingSec}s</span>}
+                  </button>
 
                   <button
                     type="button"
@@ -1053,7 +1448,7 @@ const AuraStage: React.FC = () => {
                     type="button"
                     onClick={openCompanion}
                     className="p-2 rounded-xl bg-white/[0.06] hover:bg-white/[0.12] text-white/75 hover:text-white cursor-pointer"
-                    title="Open Dual-Monitor Companion Screen (C)"
+                    title="Dual-Monitor Companion Screen (C)"
                   >
                     <MonitorSmartphone className="w-4 h-4" />
                   </button>

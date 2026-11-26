@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Search, X, Loader2, Play, Upload, Music2 } from 'lucide-react';
+import { Search, X, Loader2, Play, Upload, Music2, Plus } from 'lucide-react';
 import { SongItem } from '../types';
 import { searchRealSongs } from '../services/musicApi';
 
@@ -7,6 +7,7 @@ interface SearchBarProps {
   compact?: boolean;
   accentColor: string;
   onSelectSong: (song: SongItem, queue: SongItem[]) => void;
+  onAddToQueue?: (song: SongItem) => void;
   onUploadLocalFile: (file: File) => void;
   onDropdownToggle?: (open: boolean) => void;
 }
@@ -21,6 +22,7 @@ export const SearchBar: React.FC<SearchBarProps> = ({
   compact = false,
   accentColor,
   onSelectSong,
+  onAddToQueue,
   onUploadLocalFile,
   onDropdownToggle,
 }) => {
@@ -35,7 +37,6 @@ export const SearchBar: React.FC<SearchBarProps> = ({
     onDropdownToggle?.(open);
   }, [open, onDropdownToggle]);
 
-  // Press `/` anywhere to jump straight to song search!
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement | null)?.tagName;
@@ -56,7 +57,6 @@ export const SearchBar: React.FC<SearchBarProps> = ({
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
-  // Click outside closes dropdown
   useEffect(() => {
     const onDown = (e: MouseEvent) => {
       if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
@@ -67,7 +67,6 @@ export const SearchBar: React.FC<SearchBarProps> = ({
     return () => document.removeEventListener('mousedown', onDown);
   }, []);
 
-  // Debounced live song search
   useEffect(() => {
     const trimmed = query.trim();
     if (trimmed.length < 2) {
@@ -85,7 +84,7 @@ export const SearchBar: React.FC<SearchBarProps> = ({
         setLoading(false);
         setOpen(true);
       }
-    }, 300);
+    }, 280);
 
     return () => {
       cancelled = true;
@@ -94,7 +93,7 @@ export const SearchBar: React.FC<SearchBarProps> = ({
   }, [query]);
 
   return (
-    <div ref={containerRef} className={`relative ${compact ? 'w-[min(84vw,430px)]' : 'w-[min(92vw,580px)]'}`}>
+    <div ref={containerRef} className={`relative ${compact ? 'w-[min(66vw,430px)]' : 'w-[min(92vw,580px)]'}`}>
       <div
         className={`oled-pill rounded-full flex items-center gap-2.5 transition-all ${
           compact ? 'px-4 py-2' : 'px-5 py-3.5'
@@ -103,7 +102,7 @@ export const SearchBar: React.FC<SearchBarProps> = ({
           open
             ? {
                 borderColor: `${accentColor}88`,
-                boxShadow: `0 12px 40px rgba(0,0,0,0.8), 0 0 24px ${accentColor}2a`,
+                boxShadow: `0 12px 40px rgba(0,0,0,0.85), 0 0 24px ${accentColor}2a`,
               }
             : undefined
         }
@@ -122,11 +121,7 @@ export const SearchBar: React.FC<SearchBarProps> = ({
             if (results.length > 0) setOpen(true);
           }}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder={
-            compact
-              ? 'Search any song... (Press /)'
-              : 'Search any song — Kesariya, Starboy, Tum Hi Ho, Blinding Lights...'
-          }
+          placeholder={compact ? 'Search song... (Press /)' : 'Search song, artist, or vibe (e.g. Kesariya, Starboy)...'}
           className={`flex-1 min-w-0 bg-transparent text-white placeholder:text-white/40 outline-none ${
             compact ? 'text-xs sm:text-sm' : 'text-sm sm:text-base'
           }`}
@@ -166,7 +161,6 @@ export const SearchBar: React.FC<SearchBarProps> = ({
         </label>
       </div>
 
-      {/* Live Search Results Dropdown */}
       {open && (results.length > 0 || (!loading && query.trim().length >= 2)) && (
         <div className="absolute left-0 right-0 mt-2.5 oled-surface rounded-2xl overflow-hidden max-h-[60vh] overflow-y-auto z-50">
           {results.length === 0 ? (
@@ -176,35 +170,49 @@ export const SearchBar: React.FC<SearchBarProps> = ({
           ) : (
             <div className="divide-y divide-white/[0.05]">
               {results.map((song) => (
-                <button
+                <div
                   key={song.id}
-                  type="button"
-                  onClick={() => {
-                    onSelectSong(song, results);
-                    setOpen(false);
-                    inputRef.current?.blur();
-                  }}
-                  className="w-full px-3.5 py-2.5 flex items-center gap-3 text-left hover:bg-white/[0.07] transition-colors cursor-pointer group"
+                  className="px-3.5 py-2.5 flex items-center gap-3 hover:bg-white/[0.07] transition-colors group"
                 >
-                  <div className="relative w-11 h-11 rounded-lg overflow-hidden bg-zinc-900 shrink-0">
-                    {song.artworkUrl ? (
-                      <img src={song.artworkUrl} alt={song.title} className="w-full h-full object-cover" />
-                    ) : (
-                      <div className="w-full h-full flex items-center justify-center">
-                        <Music2 className="w-4 h-4 text-white/30" />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onSelectSong(song, results);
+                      setOpen(false);
+                      inputRef.current?.blur();
+                    }}
+                    className="flex items-center gap-3 flex-1 min-w-0 text-left cursor-pointer"
+                  >
+                    <div className="relative w-11 h-11 rounded-lg overflow-hidden bg-zinc-900 shrink-0">
+                      {song.artworkUrl ? (
+                        <img src={song.artworkUrl} alt={song.title} className="w-full h-full object-cover" />
+                      ) : (
+                        <div className="w-full h-full flex items-center justify-center">
+                          <Music2 className="w-4 h-4 text-white/30" />
+                        </div>
+                      )}
+                      <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
+                        <Play className="w-4 h-4 text-white fill-current ml-0.5" />
                       </div>
-                    )}
-                    <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
-                      <Play className="w-4 h-4 text-white fill-current ml-0.5" />
                     </div>
-                  </div>
 
-                  <div className="flex-1 min-w-0">
-                    <div className="text-sm font-medium text-white truncate">{song.title}</div>
-                    <div className="text-xs text-white/50 truncate">{song.artist}</div>
-                  </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-medium text-white truncate">{song.title}</div>
+                      <div className="text-xs text-white/50 truncate">{song.artist}</div>
+                    </div>
+                  </button>
 
                   <div className="flex items-center gap-2 shrink-0">
+                    {onAddToQueue && (
+                      <button
+                        type="button"
+                        onClick={() => onAddToQueue(song)}
+                        title="Add to Queue"
+                        className="p-1.5 rounded-lg bg-white/[0.05] hover:bg-white/[0.15] text-white/55 hover:text-white opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                      </button>
+                    )}
                     <span
                       className={`px-2 py-0.5 rounded-full text-[10px] font-mono-code font-semibold ${
                         song.isFullTrack
@@ -218,7 +226,7 @@ export const SearchBar: React.FC<SearchBarProps> = ({
                       {formatDur(song.duration)}
                     </span>
                   </div>
-                </button>
+                </div>
               ))}
             </div>
           )}

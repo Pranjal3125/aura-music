@@ -1,4 +1,5 @@
 import { GoogleGenAI } from '@google/genai';
+import { VIBE_PRESETS } from '../data/presets';
 import {
   AmbientParticleId,
   EdgeStyleId,
@@ -7,69 +8,43 @@ import {
   SongItem,
   VibeBlueprint,
   VibePalette,
+  VibePreset,
 } from '../types';
 
-interface MoodPreset {
-  key: string;
-  moodName: string;
-  archetype: string;
-  keywords: RegExp;
-  palette: VibePalette;
-  lyricStyle: LyricStyleId;
-  edgeStyle: EdgeStyleId;
-  particles: AmbientParticleId;
+export function presetToBlueprint(preset: VibePreset): VibeBlueprint {
+  return {
+    moodName: preset.name,
+    archetype: preset.tag,
+    directorNote: preset.description,
+    source: 'preset',
+    palette: { ...preset.palette },
+    lyricStyle: preset.lyricStyle,
+    edgeStyle: preset.edgeStyle,
+    particles: preset.particles,
+    showSpectrum: preset.showSpectrum,
+  };
 }
 
-const MOOD_PRESETS: MoodPreset[] = [
+const ARCHETYPE_MATCHERS: Array<{ presetId: string; keywords: RegExp }> = [
   {
-    key: 'nocturne_starlight',
-    moodName: 'Crimson Nocturne',
-    archetype: 'LATE NIGHT SYNTH',
+    presetId: 'starboy-noir',
     keywords: /\b(starboy|weeknd|daft|blinding|after hours|midnight|night|neon|lights|star|stars|dark|drive|cyber|synth|shadow|save your tears)\b/i,
-    palette: { primary: '#ff1e42', secondary: '#ff8a00', accent: '#fff4de' },
-    lyricStyle: 'constellation',
-    edgeStyle: 'lumn_vivid',
-    particles: 'cosmos',
   },
   {
-    key: 'golden_soul',
-    moodName: 'Golden Reverie',
-    archetype: 'WARM ROMANTIC // SOUL',
+    presetId: 'desi-midnight',
     keywords: /\b(kesariya|kun faya|raataan|apna bana|chaleya|heeriye|shayad|ranjha|golden|sufi|sun|dawn|love|ishq|pyaar|dil|tera|humdum|pritam)\b/i,
-    palette: { primary: '#f59e0b', secondary: '#f43f5e', accent: '#fffbeb' },
-    lyricStyle: 'constellation',
-    edgeStyle: 'lumn_vivid',
-    particles: 'embers',
   },
   {
-    key: 'midnight_rain',
-    moodName: 'Midnight Rain',
-    archetype: 'MELANCHOLIC // ACOUSTIC',
-    keywords: /\b(tum hi ho|agar tum saath|channa mereya|joji|glimpse|sad|rain|tears|lonely|broken|aashiqui|arijit|atif|lana|billie|hothon|choo lo|memories|slow)\b/i,
-    palette: { primary: '#6366f1', secondary: '#ec4899', accent: '#eef2ff' },
-    lyricStyle: 'branches',
-    edgeStyle: 'breathing_aura',
-    particles: 'rain',
+    presetId: 'monsoon-lofi',
+    keywords: /\b(tum hi ho|agar tum saath|channa mereya|joji|glimpse|sad|rain|tears|lonely|broken|aashiqui|arijit|atif|lana|billie|hothon|choo lo|memories|slow|husn|anuv)\b/i,
   },
   {
-    key: 'voltage_hype',
-    moodName: 'High Voltage',
-    archetype: 'HIP-HOP // RAGE // CLUB',
-    keywords: /\b(fein|travis|seedhe|maut|nanchaku|krsna|karan aujla|softly|ap dhillon|diljit|brown munde|phonk|trap|rap|hip hop|bass|party|overdrive|club|fire|badshah|honey)\b/i,
-    palette: { primary: '#d946ef', secondary: '#06b6d4', accent: '#ffffff' },
-    lyricStyle: 'web',
-    edgeStyle: 'laser_orbit',
-    particles: 'embers',
+    presetId: 'cyber-samurai',
+    keywords: /\b(fein|travis|seedhe|maut|nanchaku|krsna|karan aujla|softly|ap dhillon|diljit|brown munde|phonk|trap|rap|hip hop|bass|party|overdrive|club|fire|badshah|honey|samurai|tokyo)\b/i,
   },
   {
-    key: 'coder_flow',
-    moodName: '2AM Codeflow',
-    archetype: 'FOCUS // TERMINAL',
+    presetId: '2am-terminal',
     keywords: /\b(code|terminal|hacker|matrix|focus|coding|lofi|chill|study|emerald|green|electronic|techno|house)\b/i,
-    palette: { primary: '#10b981', secondary: '#06b6d4', accent: '#ecfdf5' },
-    lyricStyle: 'codestyle',
-    edgeStyle: 'lumn_vivid',
-    particles: 'cosmos',
   },
 ];
 
@@ -83,55 +58,61 @@ export function directSongAutonomously(params: {
   const lyricsText = lyrics.slice(0, 14).map((l) => l.text).join(' ');
   const songCorpus = `${song.title} ${song.artist} ${song.album} ${lyricsText}`;
 
-  let best = MOOD_PRESETS[0];
+  let bestPreset = VIBE_PRESETS[0];
   let bestScore = -1;
 
-  for (const preset of MOOD_PRESETS) {
+  for (const m of ARCHETYPE_MATCHERS) {
     let score = 0;
     if (userPrompt) {
-      const pm = userPrompt.match(new RegExp(preset.keywords.source, 'gi'));
+      const pm = userPrompt.match(new RegExp(m.keywords.source, 'gi'));
       if (pm) score += pm.length * 50;
     }
-    const sm = songCorpus.match(new RegExp(preset.keywords.source, 'gi'));
+    const sm = songCorpus.match(new RegExp(m.keywords.source, 'gi'));
     if (sm) score += sm.length * (userPrompt ? 4 : 15);
     if (score > bestScore) {
       bestScore = score;
-      best = preset;
+      bestPreset = VIBE_PRESETS.find((p) => p.id === m.presetId) || VIBE_PRESETS[0];
     }
   }
 
-  let palette: VibePalette = artworkPalette ? { ...artworkPalette } : { ...best.palette };
-  let lyricStyle: LyricStyleId = best.lyricStyle;
-  let edgeStyle: EdgeStyleId = best.edgeStyle;
-  let particles: AmbientParticleId = best.particles;
+  let palette: VibePalette = artworkPalette ? { ...artworkPalette } : { ...bestPreset.palette };
+  let lyricStyle: LyricStyleId = bestPreset.lyricStyle;
+  let edgeStyle: EdgeStyleId = bestPreset.edgeStyle;
+  let particles: AmbientParticleId = bestPreset.particles;
+  let showSpectrum = bestPreset.showSpectrum;
 
   if (userPrompt) {
     const low = userPrompt.toLowerCase();
-    if (/\b(red|crimson|starboy)\b/.test(low)) palette = { primary: '#ff1e42', secondary: '#ff7b00', accent: '#fff2db' };
-    else if (/\b(blue|ocean|ice|indigo)\b/.test(low)) palette = { primary: '#3b82f6', secondary: '#06b6d4', accent: '#eff6ff' };
+    if (/\b(red|crimson|starboy|blood)\b/.test(low)) palette = { primary: '#ff1e42', secondary: '#ff7b00', accent: '#fff2db' };
+    else if (/\b(blue|ocean|ice|arctic|indigo)\b/.test(low)) palette = { primary: '#38bdf8', secondary: '#6366f1', accent: '#f0f9ff' };
     else if (/\b(green|emerald|matrix|hacker)\b/.test(low)) palette = { primary: '#10b981', secondary: '#22d3ee', accent: '#ecfdf5' };
-    else if (/\b(purple|violet|pink)\b/.test(low)) palette = { primary: '#c026d3', secondary: '#6366f1', accent: '#fdf4ff' };
-    else if (/\b(gold|amber|warm|sunset)\b/.test(low)) palette = { primary: '#f59e0b', secondary: '#ef4444', accent: '#fffbeb' };
+    else if (/\b(purple|violet|pink|haze)\b/.test(low)) palette = { primary: '#d946ef', secondary: '#22d3ee', accent: '#fdf4ff' };
+    else if (/\b(gold|amber|warm|sunset|saffron)\b/.test(low)) palette = { primary: '#f59e0b', secondary: '#ef4444', accent: '#fffbeb' };
+    else if (/\b(white|silver|mono|leica|black)\b/.test(low)) palette = { primary: '#f8fafc', secondary: '#94a3b8', accent: '#ffffff' };
 
     if (/\b(constellation|star|stars)\b/.test(low)) { lyricStyle = 'constellation'; particles = 'cosmos'; }
     else if (/\b(branch|branches|neural|lightning|tree)\b/.test(low)) { lyricStyle = 'branches'; }
-    else if (/\b(web|spider|trap|rage|rap)\b/.test(low)) { lyricStyle = 'web'; }
+    else if (/\b(web|spider|haze)\b/.test(low)) { lyricStyle = 'web'; }
+    else if (/\b(kinetic|slam|trap|rage|rap|samurai|phonk)\b/.test(low)) { lyricStyle = 'kinetic'; showSpectrum = true; }
     else if (/\b(liquid|apple|glass|blur)\b/.test(low)) { lyricStyle = 'liquid'; }
+    else if (/\b(editorial|serif|poetic|rain|monsoon|lofi)\b/.test(low)) { lyricStyle = 'editorial'; }
     else if (/\b(code|terminal|hacker|matrix)\b/.test(low)) { lyricStyle = 'codestyle'; }
     if (/\b(rain|monsoon|sad)\b/.test(low)) particles = 'rain';
+    if (/\b(spectrum|bars|visualizer|eq)\b/.test(low)) showSpectrum = true;
   }
 
   return {
-    moodName: userPrompt ? `AI · ${best.moodName}` : best.moodName,
-    archetype: best.archetype,
+    moodName: userPrompt ? `AI · ${bestPreset.name}` : bestPreset.name,
+    archetype: bestPreset.tag,
     directorNote: userPrompt
       ? `Steered by "${userPrompt}" · ${lyricStyle} world · ${edgeStyle.replace('_', ' ')}`
-      : `Matched "${song.title}" vibe + album cover aura · ${lyricStyle} world`,
+      : `Matched "${song.title}" vibe + cover aura · ${lyricStyle} world`,
     source: userPrompt ? 'prompt_ai' : 'auto_ai',
     palette,
     lyricStyle,
     edgeStyle,
     particles,
+    showSpectrum,
   };
 }
 
@@ -150,14 +131,18 @@ const GEMINI_SCHEMA = {
       },
       required: ['primary', 'secondary', 'accent'],
     },
-    lyricStyle: { type: 'string', enum: ['constellation', 'branches', 'web', 'liquid', 'codestyle'] },
+    lyricStyle: {
+      type: 'string',
+      enum: ['constellation', 'branches', 'web', 'kinetic', 'liquid', 'editorial', 'codestyle'],
+    },
     edgeStyle: { type: 'string', enum: ['lumn_vivid', 'laser_orbit', 'breathing_aura'] },
     particles: { type: 'string', enum: ['cosmos', 'rain', 'embers', 'none'] },
+    showSpectrum: { type: 'boolean' },
   },
-  required: ['moodName', 'archetype', 'directorNote', 'palette', 'lyricStyle', 'edgeStyle', 'particles'],
+  required: ['moodName', 'archetype', 'directorNote', 'palette', 'lyricStyle', 'edgeStyle', 'particles', 'showSpectrum'],
 };
 
-const CACHE_KEY = 'aura_oled_gemini_cache_v3';
+const CACHE_KEY = 'aura_oled_gemini_cache_v4';
 
 export async function directSongWithGemini(params: {
   apiKey: string;
@@ -181,7 +166,7 @@ export async function directSongWithGemini(params: {
   const lyricsSample = lyrics.slice(0, 12).map((l) => l.text).join('\n');
 
   const prompt = `You are AURA, an ultra-luxury dark-room music aesthetic director (Verci + Lumn on pitch-black OLED).
-Pick the exact vibrant neon palette, lyric visual world (constellation | branches | web | liquid | codestyle), edge lighting style, and atmosphere for this song:
+Pick the exact vibrant neon palette, lyric visual world (constellation | branches | web | kinetic | liquid | editorial | codestyle), edge lighting style, atmosphere, and whether bottom spectrum bars fit this track:
 
 Song: "${song.title}" by "${song.artist}" (Album: "${song.album}")
 ${userPrompt ? `User creative prompt: "${userPrompt}"` : ''}

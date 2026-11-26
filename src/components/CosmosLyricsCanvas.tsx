@@ -1,13 +1,20 @@
 import React, { useEffect, useRef } from 'react';
 import { LyricLine, LyricStyleId, VibePalette } from '../types';
 
+export interface AudioPulseState {
+  bass: number;
+  beat: number;
+  mid: number;
+  spectrum: Float32Array;
+}
+
 interface CosmosLyricsCanvasProps {
   mode: Extract<LyricStyleId, 'constellation' | 'branches' | 'web'>;
   lyrics: LyricLine[];
   activeLineIdx: number;
   activeWordIdx: number;
   palette: VibePalette;
-  audioPulseRef: React.MutableRefObject<{ bass: number; beat: number; mid: number }>;
+  audioPulseRef: React.MutableRefObject<AudioPulseState>;
   particleMode: 'cosmos' | 'rain' | 'embers' | 'none';
 }
 
@@ -20,7 +27,6 @@ interface WorldWordNode {
   wy: number;
   seed: number;
   labelAbove: boolean;
-  // Per-node continuous butter-smooth animation state (0..1)
   glow: number;
   scale: number;
   scaleVel: number;
@@ -232,14 +238,12 @@ export const CosmosLyricsCanvas: React.FC<CosmosLyricsCanvasProps> = ({
 
     const sparks: Spark[] = [];
 
-    // Critically-damped smooth spring camera (Apple ProMotion silky glide!)
     let camX = 0;
     let camY = 0;
     let camVx = 0;
     let camVy = 0;
     let camInitialized = false;
 
-    // Smoothly morphed live RGB palette (zero harsh color jumps!)
     const curP: [number, number, number] = hexToRgb(stateRef.current.palette.primary);
     const curS: [number, number, number] = hexToRgb(stateRef.current.palette.secondary);
     const curA: [number, number, number] = hexToRgb(stateRef.current.palette.accent);
@@ -251,7 +255,6 @@ export const CosmosLyricsCanvas: React.FC<CosmosLyricsCanvasProps> = ({
     let rafId = 0;
 
     const render = (now: number) => {
-      // Delta-time clamped to prevent jumps after tab switch
       const dt = Math.min(0.05, Math.max(0.001, (now - prevNow) * 0.001));
       prevNow = now;
       const t = now * 0.001;
@@ -261,7 +264,6 @@ export const CosmosLyricsCanvas: React.FC<CosmosLyricsCanvasProps> = ({
       const sprites = spritesRef.current;
       const pulse = audioPulseRef.current;
 
-      // Smoothly morph colors over ~1.1s on song/mood switch
       const targetP = hexToRgb(st.palette.primary);
       const targetS = hexToRgb(st.palette.secondary);
       const targetA = hexToRgb(st.palette.accent);
@@ -274,7 +276,6 @@ export const CosmosLyricsCanvas: React.FC<CosmosLyricsCanvasProps> = ({
 
       ctx.clearRect(0, 0, w, h);
 
-      // Locate active word node
       let activeGlobal = -1;
       if (st.activeLineIdx >= 0 && world.length > 0) {
         const targetW = Math.max(0, st.activeWordIdx);
@@ -289,7 +290,6 @@ export const CosmosLyricsCanvas: React.FC<CosmosLyricsCanvasProps> = ({
         }
       }
 
-      // Snap camera cleanly on first word of a new song, then spring-glide smoothly!
       if (activeGlobal >= 0 && world[activeGlobal]) {
         const target = world[activeGlobal];
         const nextNode = world[activeGlobal + 1];
@@ -303,7 +303,6 @@ export const CosmosLyricsCanvas: React.FC<CosmosLyricsCanvasProps> = ({
           camVy = 0;
           camInitialized = true;
         } else {
-          // Critically damped spring: stiffness = 14, damping = 2*sqrt(14) ≈ 7.48 (zero wobble, pure silk!)
           const stiffness = 13.5;
           const damping = 7.4;
           const ax = (lookX - camX) * stiffness - camVx * damping;
@@ -317,7 +316,6 @@ export const CosmosLyricsCanvas: React.FC<CosmosLyricsCanvasProps> = ({
         camInitialized = false;
       }
 
-      // Fire soft ignition sparks on word change
       if (activeGlobal !== lastActiveGlobal && activeGlobal >= 0) {
         lastActiveGlobal = activeGlobal;
         webRipple = 1;
@@ -349,9 +347,7 @@ export const CosmosLyricsCanvas: React.FC<CosmosLyricsCanvasProps> = ({
       webRipple *= Math.exp(-3.2 * dt);
       webCenterScale += (1 - webCenterScale) * (1 - Math.exp(-9.5 * dt));
 
-      // ================================================================
-      // LAYER 1: PARALLAX DEEP-SPACE STARFIELD / RAIN / EMBERS
-      // ================================================================
+      // LAYER 1: Parallax Starfield / Rain / Embers
       if (st.particleMode !== 'none') {
         for (let i = 0; i < bgStars.length; i++) {
           const s = bgStars[i];
@@ -382,9 +378,7 @@ export const CosmosLyricsCanvas: React.FC<CosmosLyricsCanvasProps> = ({
         }
       }
 
-      // ================================================================
-      // LAYER 2: SILKY SPRING-ANIMATED CONSTELLATION / BRANCHES / WEB
-      // ================================================================
+      // LAYER 2: Constellation / Branches / Web
       if (activeGlobal >= 0 && world.length > 0 && sprites) {
         const cxScreen = w * 0.5;
         const cyScreen = h * 0.48;
@@ -393,7 +387,6 @@ export const CosmosLyricsCanvas: React.FC<CosmosLyricsCanvasProps> = ({
           const windowStart = Math.max(0, activeGlobal - 15);
           const windowEnd = Math.min(world.length - 1, activeGlobal + 9);
 
-          // Step per-node continuous smooth physics (zero abrupt 1-frame snaps!)
           const glowUp = 1 - Math.exp(-9.0 * dt);
           const glowDown = 1 - Math.exp(-4.2 * dt);
           const alphaEase = 1 - Math.exp(-5.0 * dt);
@@ -406,30 +399,22 @@ export const CosmosLyricsCanvas: React.FC<CosmosLyricsCanvasProps> = ({
             const dist = Math.abs(i - activeGlobal);
             const prox = Math.max(0, 1 - dist / 13);
 
-            // Smooth glow ramp (snappy silky bloom in, velvety fade down!)
             const targetGlow = isAct ? 1 : isPast ? prox * 0.28 : 0;
             n.glow += (targetGlow - n.glow) * (isAct ? glowUp : glowDown);
 
-            // Spring scale with delicate Apple-style gentle lift on active word!
             const targetScale = isAct ? 1 : 0;
             const scaleAcc = (targetScale - n.scale) * 140 - n.scaleVel * 19;
             n.scaleVel += scaleAcc * dt;
             n.scale = Math.max(0, n.scale + n.scaleVel * dt);
 
-            // Smooth filament drawing progress (draws along line over ~360ms!)
             const targetEdge = i <= activeGlobal ? 1 : 0;
-            if (targetEdge > n.edgeProg) {
-              n.edgeProg = Math.min(1, n.edgeProg + dt * 2.8);
-            } else if (i > activeGlobal + 1) {
-              n.edgeProg *= Math.exp(-4 * dt);
-            }
+            if (targetEdge > n.edgeProg) n.edgeProg = Math.min(1, n.edgeProg + dt * 2.8);
+            else if (i > activeGlobal + 1) n.edgeProg *= Math.exp(-4 * dt);
 
-            // Smooth visibility alpha fade in/out
             const targetVis = isAct ? 1 : isSameLine ? (isPast ? 0.74 : 0.3) : prox * (isPast ? 0.4 : 0.14);
             n.visAlpha += (targetVis - n.visAlpha) * alphaEase;
           }
 
-          // 2A. Draw Silky Self-Drawing Filaments & Organic Neural Branches
           for (let i = windowStart; i < windowEnd; i++) {
             const a = world[i];
             const b = world[i + 1];
@@ -442,7 +427,6 @@ export const CosmosLyricsCanvas: React.FC<CosmosLyricsCanvasProps> = ({
             const dist = Math.abs(i - activeGlobal);
             const fade = Math.max(0.04, 1 - dist / 13);
 
-            // Faint preview line ahead + smoothly eased glowing live trace!
             const drawFrac = easeOutCubic(b.edgeProg);
             const ex = ax + (bx - ax) * drawFrac;
             const ey = ay + (by - ay) * drawFrac;
@@ -458,7 +442,6 @@ export const CosmosLyricsCanvas: React.FC<CosmosLyricsCanvasProps> = ({
               const ctrlX = midX - (by - ay) * 0.22 + bend * 0.3;
               const ctrlY = midY + (bx - ax) * 0.22 + bend * 0.3;
 
-              // Subtle dormant branch guide
               ctx.strokeStyle = rgba(curA, fade * 0.11);
               ctx.lineWidth = 0.85;
               ctx.beginPath();
@@ -466,7 +449,6 @@ export const CosmosLyricsCanvas: React.FC<CosmosLyricsCanvasProps> = ({
               ctx.quadraticCurveTo(ctrlX, ctrlY, bx, by);
               ctx.stroke();
 
-              // Luminous living branch growth
               if (drawFrac > 0.01) {
                 const qx = (1 - drawFrac) * (1 - drawFrac) * ax + 2 * (1 - drawFrac) * drawFrac * ctrlX + drawFrac * drawFrac * bx;
                 const qy = (1 - drawFrac) * (1 - drawFrac) * ay + 2 * (1 - drawFrac) * drawFrac * ctrlY + drawFrac * drawFrac * by;
@@ -487,7 +469,6 @@ export const CosmosLyricsCanvas: React.FC<CosmosLyricsCanvasProps> = ({
                 }
               }
             } else {
-              // Subtle unlit constellation guide thread
               ctx.strokeStyle = rgba(curA, fade * 0.12);
               ctx.lineWidth = 0.75;
               ctx.beginPath();
@@ -495,7 +476,6 @@ export const CosmosLyricsCanvas: React.FC<CosmosLyricsCanvasProps> = ({
               ctx.lineTo(bx, by);
               ctx.stroke();
 
-              // Smoothly ignited luminous filament
               if (drawFrac > 0.01) {
                 const grad = ctx.createLinearGradient(ax, ay, ex, ey);
                 grad.addColorStop(0, rgba(curA, Math.min(0.85, fade * 0.38 + segGlow * 0.42)));
@@ -514,7 +494,6 @@ export const CosmosLyricsCanvas: React.FC<CosmosLyricsCanvasProps> = ({
                 }
               }
 
-              // Delicate celestial triangulation hairlines
               if (i < activeGlobal && i + 2 <= windowEnd && world[i + 2].lineIdx === a.lineIdx && i % 2 === 0) {
                 const cNode = world[i + 2];
                 ctx.strokeStyle = rgba(curA, fade * 0.08);
@@ -528,9 +507,8 @@ export const CosmosLyricsCanvas: React.FC<CosmosLyricsCanvasProps> = ({
             ctx.restore();
           }
 
-          // 2B. Draw Smoothly Blooming Star Nodes & Spring-Scaled Typography!
           const basePx = Math.min(22, Math.max(16, w * 0.0165));
-          const activeBoost = 0.88; // scales smoothly from 1.0x -> 1.88x via spring!
+          const activeBoost = 0.88;
 
           for (let i = windowStart; i <= windowEnd; i++) {
             const node = world[i];
@@ -541,7 +519,6 @@ export const CosmosLyricsCanvas: React.FC<CosmosLyricsCanvasProps> = ({
             const g = node.glow;
             const sc = node.scale;
 
-            // Smooth HDR bloom sprite scaling continuously with `g`!
             if (g > 0.03) {
               ctx.save();
               ctx.globalCompositeOperation = 'lighter';
@@ -556,7 +533,6 @@ export const CosmosLyricsCanvas: React.FC<CosmosLyricsCanvasProps> = ({
               ctx.restore();
             }
 
-            // Star diamond vertex smoothly growing & gently rotating!
             const starSize = 2.2 + g * (10.5 + pulse.beat * 3.5);
             if (g > 0.25 || i % 2 === 0) {
               drawFourPointStar(
@@ -574,7 +550,6 @@ export const CosmosLyricsCanvas: React.FC<CosmosLyricsCanvasProps> = ({
               ctx.fill();
             }
 
-            // Smooth continuous typography scaling via ctx.scale() (ZERO discrete font-size stair-stepping!)
             const yOff = node.labelAbove ? -26 - sc * 6 : 29 + sc * 6;
             const smoothScale = 1 + sc * (activeBoost + pulse.beat * 0.05);
 
@@ -585,7 +560,6 @@ export const CosmosLyricsCanvas: React.FC<CosmosLyricsCanvasProps> = ({
             ctx.textBaseline = 'middle';
             ctx.font = `${g > 0.45 ? 700 : 500} ${basePx.toFixed(1)}px "Space Grotesk", sans-serif`;
 
-            // Soft additive glow behind glowing word
             if (g > 0.15) {
               ctx.save();
               ctx.globalCompositeOperation = 'lighter';
@@ -595,7 +569,6 @@ export const CosmosLyricsCanvas: React.FC<CosmosLyricsCanvasProps> = ({
               ctx.restore();
             }
 
-            // Smooth color blend from cool soft white -> radiant warm accent!
             const rCol = 255 + (curA[0] - 255) * g;
             const gCol = 255 + (curA[1] - 255) * g;
             const bCol = 255 + (curA[2] - 255) * g;
@@ -604,9 +577,7 @@ export const CosmosLyricsCanvas: React.FC<CosmosLyricsCanvasProps> = ({
             ctx.restore();
           }
         } else {
-          // ================================================================
           // MODE 3: SILKY LUMINOUS WEB
-          // ================================================================
           const line = st.lyrics[st.activeLineIdx];
           if (line && line.words.length > 0) {
             const words = line.words;
@@ -698,9 +669,7 @@ export const CosmosLyricsCanvas: React.FC<CosmosLyricsCanvasProps> = ({
         }
       }
 
-      // ================================================================
-      // LAYER 3: DELTA-TIME SMOOTH IGNITION SPARKS
-      // ================================================================
+      // LAYER 3: Radiant Ignition Sparks
       if (sparks.length > 0 && sprites) {
         ctx.save();
         ctx.globalCompositeOperation = 'lighter';
