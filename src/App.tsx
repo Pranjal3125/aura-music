@@ -26,6 +26,9 @@ import {
   Mic,
   Minus,
   Plus,
+  Infinity as InfinityIcon,
+  Repeat1,
+  Radio,
 } from 'lucide-react';
 import {
   AmbientParticleId,
@@ -40,8 +43,11 @@ import {
 import { EQ_PRESETS, VIBE_PRESETS } from './data/presets';
 import {
   extractPaletteFromArtwork,
+  fetchInfiniteRadioSongs,
   fetchSyncedLyricsForSong,
+  launchRadioStation,
   loadFeaturedSongs,
+  makeSongKey,
   parseLocalFileName,
 } from './services/musicApi';
 import { LightAudioEngine } from './engine/lightAudioEngine';
@@ -133,6 +139,11 @@ const AuraStage: React.FC = () => {
 
   const [queue, setQueue] = useState<SongItem[]>([]);
   const [activeSong, setActiveSong] = useState<SongItem | null>(null);
+  const [infiniteRadio, setInfiniteRadio] = useState(true);
+  const [repeatOne, setRepeatOne] = useState(false);
+  const [radioLoading, setRadioLoading] = useState(false);
+  const playedKeysRef = useRef<Set<string>>(new Set());
+  const radioFetchingRef = useRef(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [duration, setDuration] = useState(0);
   const [volume, setVolume] = useState(0.85);
@@ -193,6 +204,8 @@ const AuraStage: React.FC = () => {
     isPlaying,
     queue,
     featured,
+    infiniteRadio,
+    repeatOne,
   });
   rafStateRef.current = {
     lyrics,
@@ -204,6 +217,8 @@ const AuraStage: React.FC = () => {
     isPlaying,
     queue,
     featured,
+    infiniteRadio,
+    repeatOne,
   };
 
   const showToast = useCallback((msg: string) => {
@@ -252,10 +267,55 @@ const AuraStage: React.FC = () => {
     [showToast]
   );
 
+  const replenishRadio = useCallback(
+    async (seed: SongItem, baseQueue: SongItem[]): Promise<SongItem[]> => {
+      if (radioFetchingRef.current) return [];
+      radioFetchingRef.current = true;
+      setRadioLoading(true);
+      try {
+        const exclude = new Set<string>(playedKeysRef.current);
+        baseQueue.forEach((s) => {
+          exclude.add(s.id);
+          exclude.add(makeSongKey(s.title, s.artist));
+        });
+        const fresh = await fetchInfiniteRadioSongs(seed, exclude);
+        if (fresh.length > 0) {
+          setQueue((prev) => {
+            const seen = new Set(prev.map((x) => makeSongKey(x.title, x.artist)));
+            const uniqueNew = fresh.filter((f) => !seen.has(makeSongKey(f.title, f.artist)));
+            // Keep history window sleek (max ~45 recent/upcoming tracks in memory)
+            return [...prev.slice(-30), ...uniqueNew];
+          });
+        }
+        return fresh;
+      } finally {
+        radioFetchingRef.current = false;
+        setRadioLoading(false);
+      }
+    },
+    []
+  );
+
   const playSong = useCallback(
     async (song: SongItem, newQueue?: SongItem[]) => {
-      if (newQueue && newQueue.length > 0) setQueue(newQueue);
-      else if (queue.length === 0 && featured.length > 0) setQueue(featured);
+      playedKeysRef.current.add(song.id);
+      playedKeysRef.current.add(makeSongKey(song.title, song.artist));
+      if (playedKeysRef.current.size > 160) {
+        playedKeysRef.current.clear();
+        playedKeysRef.current.add(song.id);
+      }
+
+      const activeQueue =
+        newQueue && newQueue.length > 0
+          ? newQueue
+          : queue.length > 0
+            ? queue
+            : [song];
+      if (newQueue && newQueue.length > 0) {
+        setQueue(newQueue);
+      } else if (queue.length === 0) {
+        setQueue([song]);
+      }
 
       setActiveSong(song);
       setDuration(song.duration);
@@ -272,6 +332,15 @@ const AuraStage: React.FC = () => {
           await engine.loadAndPlay(song.audioUrl);
         } catch {
           showToast('Click Play to start audio.');
+        }
+      }
+
+      // If Infinite Radio is ON and <= 2 songs remain ahead in Queue, auto-fetch fresh tracks!
+      if (rafStateRef.current.infiniteRadio) {
+        const curIdx = activeQueue.findIndex((s) => s.id === song.id);
+        const remaining = curIdx < 0 ? 0 : activeQueue.length - 1 - curIdx;
+        if (remaining <= 2) {
+          void replenishRadio(song, activeQueue);
         }
       }
 
@@ -316,18 +385,44 @@ const AuraStage: React.FC = () => {
         }
       }
     },
-    [featured, queue.length, geminiKey, showToast]
+    [queue, geminiKey, showToast, replenishRadio]
   );
 
   const playAdjacent = useCallback(
-    (dir: 1 | -1) => {
+    async (dir: 1 | -1) => {
       const list = queue.length > 0 ? queue : featured;
       if (list.length === 0 || !activeSong) return;
       const idx = list.findIndex((s) => s.id === activeSong.id);
+
+      if (dir === 1 && idx === list.length - 1 && infiniteRadio) {
+        const fresh = await replenishRadio(activeSong, list);
+        if (fresh.length > 0) {
+          void playSong(fresh[0]);
+          return;
+        }
+      }
+
       const nextIdx = idx < 0 ? 0 : (idx + dir + list.length) % list.length;
       void playSong(list[nextIdx], list);
     },
-    [queue, featured, activeSong, playSong]
+    [queue, featured, activeSong, infiniteRadio, replenishRadio, playSong]
+  );
+
+  const playAdjacentRef = useRef(playAdjacent);
+  playAdjacentRef.current = playAdjacent;
+
+  const handleLaunchStation = useCallback(
+    async (stationTitle: string, query: string) => {
+      showToast(`Tuning ${stationTitle} Radio...`);
+      const songs = await launchRadioStation(query);
+      if (songs.length === 0) {
+        showToast('Could not load radio tracks right now.');
+        return;
+      }
+      setInfiniteRadio(true);
+      void playSong(songs[0], songs);
+    },
+    [playSong, showToast]
   );
 
   const playSongRef = useRef(playSong);
@@ -393,11 +488,14 @@ const AuraStage: React.FC = () => {
     engine.onDurationChange = (dur) => setDuration(dur);
     engine.onEnded = () => {
       const st = rafStateRef.current;
-      const list = st.queue.length > 0 ? st.queue : st.featured;
-      if (st.activeSong && st.activeSong.isFullTrack && list.length > 1) {
-        const idx = list.findIndex((s) => s.id === st.activeSong!.id);
-        const nextIdx = idx < 0 ? 0 : (idx + 1) % list.length;
-        void playSongRef.current(list[nextIdx], list);
+      if (!st.activeSong) return;
+      if (st.repeatOne) {
+        engine.seek(0);
+        engine.play();
+        return;
+      }
+      if (st.infiniteRadio || (st.queue.length > 1)) {
+        void playAdjacentRef.current(1);
       }
     };
 
@@ -928,7 +1026,7 @@ const AuraStage: React.FC = () => {
                   <button
                     key={song.id}
                     type="button"
-                    onClick={() => void playSong(song, featured)}
+                    onClick={() => void playSong(song, [song])}
                     className="group oled-surface flex items-center gap-3 p-2.5 rounded-2xl hover:border-white/20 hover:-translate-y-0.5 transition-all duration-300 ease-apple text-left cursor-pointer"
                   >
                     <div
@@ -957,6 +1055,28 @@ const AuraStage: React.FC = () => {
                 ))}
               </div>
             )}
+
+            {/* 1-Click Endless Radio Stations */}
+            <div className="flex items-center justify-center gap-2 mt-5 flex-wrap">
+              <span className="text-[10px] font-mono-code uppercase tracking-widest text-white/35 flex items-center gap-1 mr-1">
+                <Radio className="w-3 h-3" style={{ color: primary }} /> Endless Radio:
+              </span>
+              {[
+                { label: 'Trending Hindi ∞', q: 'Trending Hindi' },
+                { label: 'Romantic Soul ∞', q: 'Bollywood Romantic' },
+                { label: 'Indie Chill ∞', q: 'Indie India' },
+                { label: 'Punjabi Hits ∞', q: 'Punjabi Hits' },
+              ].map((st) => (
+                <button
+                  key={st.label}
+                  type="button"
+                  onClick={() => void handleLaunchStation(st.label, st.q)}
+                  className="oled-pill px-3 py-1 rounded-full text-[11px] text-white/70 hover:text-white hover:border-white/25 transition-all cursor-pointer"
+                >
+                  {st.label}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
       )}
@@ -1364,6 +1484,15 @@ const AuraStage: React.FC = () => {
             currentTime={audioRef.current?.getCurrentTime() || 0}
             accentColor={primary}
             queue={queue}
+            infiniteRadio={infiniteRadio}
+            radioLoading={radioLoading}
+            onToggleInfiniteRadio={() =>
+              setInfiniteRadio((v) => {
+                const next = !v;
+                showToast(next ? 'Infinite Radio Autoplay ON' : 'Loop Queue Mode');
+                return next;
+              })
+            }
             onSeekToLine={(sec) => {
               audioRef.current?.seek(sec);
               setLyricOffset(0);
@@ -1544,10 +1673,27 @@ const AuraStage: React.FC = () => {
                 </div>
 
                 {/* Transport */}
-                <div className="flex items-center gap-1.5 shrink-0">
+                <div className="flex items-center gap-1 sm:gap-1.5 shrink-0">
                   <button
                     type="button"
-                    onClick={() => playAdjacent(-1)}
+                    onClick={() =>
+                      setRepeatOne((r) => {
+                        const next = !r;
+                        showToast(next ? 'Repeat Current Track ON' : 'Repeat One OFF');
+                        return next;
+                      })
+                    }
+                    className={`hidden sm:flex p-2 rounded-xl transition-colors cursor-pointer ${
+                      repeatOne ? 'text-black' : 'text-white/45 hover:text-white hover:bg-white/[0.08]'
+                    }`}
+                    style={repeatOne ? { backgroundColor: primary } : undefined}
+                    title="Repeat Current Song"
+                  >
+                    <Repeat1 className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void playAdjacent(-1)}
                     className="p-2 rounded-xl text-white/65 hover:text-white hover:bg-white/[0.08] cursor-pointer"
                     title="Previous"
                   >
@@ -1564,11 +1710,28 @@ const AuraStage: React.FC = () => {
                   </button>
                   <button
                     type="button"
-                    onClick={() => playAdjacent(1)}
+                    onClick={() => void playAdjacent(1)}
                     className="p-2 rounded-xl text-white/65 hover:text-white hover:bg-white/[0.08] cursor-pointer"
                     title="Next"
                   >
                     <SkipForward className="w-4 h-4" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setInfiniteRadio((v) => {
+                        const next = !v;
+                        showToast(next ? '∞ Non-Stop Radio Autoplay ON' : '∞ Autoplay OFF');
+                        return next;
+                      })
+                    }
+                    className={`hidden sm:flex p-2 rounded-xl transition-colors cursor-pointer ${
+                      infiniteRadio ? 'text-white bg-white/[0.1]' : 'text-white/40 hover:text-white hover:bg-white/[0.08]'
+                    }`}
+                    style={infiniteRadio ? { color: primary } : undefined}
+                    title="Infinite Radio Autoplay (Never loops same songs)"
+                  >
+                    <InfinityIcon className="w-3.5 h-3.5" />
                   </button>
                 </div>
 

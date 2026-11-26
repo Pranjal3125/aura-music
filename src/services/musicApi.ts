@@ -38,6 +38,13 @@ interface ItunesSongRaw {
   releaseDate?: string;
 }
 
+export function makeSongKey(title: string, artist: string): string {
+  return `${title.toLowerCase().replace(/\(.*?\)|\[.*?\]|[^a-z0-9]/g, '')}::${artist
+    .toLowerCase()
+    .split(/[,&]/)[0]
+    .replace(/[^a-z0-9]/g, '')}`;
+}
+
 /**
  * Searches REAL songs across JioSaavn (320kbps FULL tracks) & Apple iTunes (Global catalog + HD covers).
  */
@@ -53,21 +60,15 @@ export async function searchRealSongs(query: string): Promise<SongItem[]> {
   const merged: SongItem[] = [];
   const seen = new Set<string>();
 
-  const makeKey = (title: string, artist: string) =>
-    `${title.toLowerCase().replace(/\(.*?\)|\[.*?\]|[^a-z0-9]/g, '')}::${artist
-      .toLowerCase()
-      .split(/[,&]/)[0]
-      .replace(/[^a-z0-9]/g, '')}`;
-
   for (const s of saavnResults) {
-    const key = makeKey(s.title, s.artist);
+    const key = makeSongKey(s.title, s.artist);
     if (seen.has(key)) continue;
     seen.add(key);
     merged.push(s);
   }
 
   for (const s of itunesResults) {
-    const key = makeKey(s.title, s.artist);
+    const key = makeSongKey(s.title, s.artist);
     if (seen.has(key)) continue;
     seen.add(key);
     merged.push(s);
@@ -446,6 +447,168 @@ export async function extractPaletteFromArtwork(imageUrl: string): Promise<VibeP
   } catch {
     return null;
   }
+}
+
+const RADIO_PLAYLIST_QUERIES = [
+  'Trending Hindi',
+  'Hindi Hit Songs',
+  'Bollywood Romantic',
+  'Indie India',
+  'Punjabi Hits',
+  'Sufi Bollywood',
+  'Arijit Singh Best',
+  'Bollywood Chill',
+];
+
+const GLOBAL_RADIO_ARTISTS = [
+  'The Weeknd',
+  'Daft Punk',
+  'Tame Impala',
+  'Cigarettes After Sex',
+  'Post Malone',
+  'Billie Eilish',
+  'Travis Scott',
+  'Arctic Monkeys',
+  'Coldplay',
+  'Joji',
+];
+
+function shuffleArray<T>(arr: T[]): T[] {
+  const copy = [...arr];
+  for (let i = copy.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [copy[i], copy[j]] = [copy[j], copy[i]];
+  }
+  return copy;
+}
+
+async function fetchSaavnPlaylistSongs(query: string): Promise<SongItem[]> {
+  try {
+    const plRes = await fetch(
+      `https://saavn.sumit.co/api/search/playlists?query=${encodeURIComponent(query)}&limit=4`
+    );
+    if (!plRes.ok) return [];
+    const plJson = (await plRes.json()) as { data?: { results?: Array<{ id: string }> } };
+    const playlists = plJson?.data?.results || [];
+    if (playlists.length === 0) return [];
+    const picked = playlists[Math.floor(Math.random() * Math.min(playlists.length, 3))];
+
+    const detailRes = await fetch(
+      `https://saavn.sumit.co/api/playlists?id=${encodeURIComponent(picked.id)}&limit=25`
+    );
+    if (!detailRes.ok) return [];
+    const detailJson = (await detailRes.json()) as { data?: { songs?: SaavnSongRaw[] } };
+    const rows = detailJson?.data?.songs || [];
+
+    const out: SongItem[] = [];
+    for (const r of rows) {
+      const title = decodeHtml(r.name || '');
+      const artist = decodeHtml(
+        (r.artists?.primary || [])
+          .map((a) => a.name || '')
+          .filter(Boolean)
+          .join(', ') || 'Unknown Artist'
+      );
+      const album = decodeHtml(r.album?.name || '');
+      if (!title || JUNK_PATTERN.test(`${title} ${artist} ${album}`)) continue;
+      const dur = Number(r.duration) || 210;
+      if (dur < 90) continue;
+
+      const downloads = r.downloadUrl || [];
+      const bestAudio =
+        downloads.find((d) => d.quality === '320kbps')?.url ||
+        downloads.find((d) => d.quality === '160kbps')?.url ||
+        downloads[downloads.length - 1]?.url;
+      if (!bestAudio) continue;
+
+      const images = r.image || [];
+      const bestImg =
+        images.find((i) => i.quality === '500x500')?.url ||
+        images[images.length - 1]?.url ||
+        '';
+
+      out.push({
+        id: `saavn-${r.id}`,
+        title,
+        artist,
+        album,
+        duration: dur,
+        artworkUrl: bestImg,
+        audioUrl: bestAudio,
+        source: 'saavn',
+        isFullTrack: true,
+        year: r.year,
+        playCount: typeof r.playCount === 'number' ? r.playCount : undefined,
+      });
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Infinite Smart Radio Engine: fetches fresh, unplayed tracks matching the current vibe/artist/playlist
+ * so songs NEVER stop or repeat in a tiny loop!
+ */
+export async function fetchInfiniteRadioSongs(
+  seedSong: SongItem,
+  excludeKeys: Set<string>,
+  stationHint?: string
+): Promise<SongItem[]> {
+  const artists = seedSong.artist.split(/[,&]/).map((a) => a.trim()).filter(Boolean);
+  const singer = artists[1] || artists[0] || '';
+  const randomPlaylistQ =
+    stationHint ||
+    RADIO_PLAYLIST_QUERIES[Math.floor(Math.random() * RADIO_PLAYLIST_QUERIES.length)];
+
+  const pool: SongItem[] = [];
+
+  if (seedSong.source === 'itunes') {
+    const altArtist = GLOBAL_RADIO_ARTISTS[Math.floor(Math.random() * GLOBAL_RADIO_ARTISTS.length)];
+    const [byArtist, byGlobal] = await Promise.all([
+      singer ? fetchItunesSongs(singer) : Promise.resolve([]),
+      fetchItunesSongs(altArtist),
+    ]);
+    pool.push(...byArtist, ...byGlobal);
+  } else {
+    const [byArtist, byPlaylist] = await Promise.all([
+      singer && !/unknown|local|live/i.test(singer) ? fetchSaavnSongs(singer) : Promise.resolve([]),
+      fetchSaavnPlaylistSongs(randomPlaylistQ),
+    ]);
+    pool.push(...byArtist, ...byPlaylist);
+  }
+
+  const fresh: SongItem[] = [];
+  const seen = new Set<string>(excludeKeys);
+
+  for (const s of shuffleArray(pool)) {
+    const key = makeSongKey(s.title, s.artist);
+    if (seen.has(key) || seen.has(s.id)) continue;
+    seen.add(key);
+    fresh.push(s);
+    if (fresh.length >= 12) break;
+  }
+
+  return fresh;
+}
+
+export async function launchRadioStation(stationQuery: string): Promise<SongItem[]> {
+  const [plSongs, searchSongs] = await Promise.all([
+    fetchSaavnPlaylistSongs(stationQuery),
+    fetchSaavnSongs(stationQuery),
+  ]);
+  const combined = shuffleArray([...searchSongs, ...plSongs]);
+  const seen = new Set<string>();
+  const out: SongItem[] = [];
+  for (const s of combined) {
+    const k = makeSongKey(s.title, s.artist);
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(s);
+    if (out.length >= 16) break;
+  }
+  return out;
 }
 
 export function parseLocalFileName(filename: string): { artist: string; title: string } {
