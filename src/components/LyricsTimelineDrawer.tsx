@@ -51,7 +51,7 @@ export const LyricsTimelineDrawer: React.FC<LyricsTimelineDrawerProps> = ({
   if (!open) return null;
 
   return (
-    <div className="fixed inset-y-4 left-4 z-40 w-[min(92vw,380px)] oled-surface rounded-3xl flex flex-col overflow-hidden">
+    <div className="fixed top-20 bottom-36 left-5 z-50 w-[min(92vw,380px)] oled-surface rounded-3xl flex flex-col overflow-hidden">
       {/* Header */}
       <div className="px-4 py-3.5 border-b border-white/[0.08] flex items-center justify-between gap-2">
         <div className="flex items-center gap-1 bg-white/[0.05] p-1 rounded-xl">

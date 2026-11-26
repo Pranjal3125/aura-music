@@ -772,7 +772,7 @@ const AuraStage: React.FC = () => {
       )}
 
       {toast && !pureCinema && (
-        <div className="fixed top-5 right-5 z-50 oled-pill px-3.5 py-2 rounded-full text-xs text-white/90 flex items-center gap-2">
+        <div className="fixed top-20 left-1/2 -translate-x-1/2 z-50 oled-pill px-4 py-1.5 rounded-full text-xs text-white/90 flex items-center gap-2 pointer-events-none">
           <Sparkles className="w-3.5 h-3.5 shrink-0" style={{ color: primary }} />
           <span>{toast}</span>
         </div>
@@ -948,7 +948,7 @@ const AuraStage: React.FC = () => {
 
           {/* Right Pro Studio Drawer: 10 Tagde Presets + AI Steer + EQ + Visuals + Focus + Gemini */}
           {vibePanelOpen && !pureCinema && (
-            <div className="fixed top-20 bottom-28 right-5 z-40 w-[min(92vw,390px)] oled-surface rounded-3xl p-4 overflow-y-auto space-y-5">
+            <div className="fixed top-20 bottom-36 right-5 z-50 w-[min(92vw,390px)] oled-surface rounded-3xl p-4 overflow-y-auto space-y-5">
               {/* Header */}
               <div className="flex items-center justify-between">
                 <div>
