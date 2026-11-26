@@ -214,6 +214,152 @@
   animation: cursor-blink 0.88s infinite;
 }
 
+/* =====================================================================
+   JAW-DROPPING LYRIC SPRING ANIMATIONS & LIQUID AURORA PHYSICS
+   ===================================================================== */
+
+@keyframes aura-kinetic-slam {
+  0% {
+    opacity: 0.25;
+    transform: scale(1.44) translateY(10px);
+    filter: blur(8px);
+  }
+  52% {
+    opacity: 1;
+    transform: scale(0.96) translateY(-2px);
+    filter: blur(0px);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+    filter: blur(0px);
+  }
+}
+
+.animate-aura-slam {
+  animation: aura-kinetic-slam 0.34s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@keyframes aura-shock-ring {
+  0% {
+    opacity: 0.82;
+    transform: scale(0.32);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(2.45);
+  }
+}
+
+.animate-aura-shock {
+  animation: aura-shock-ring 0.56s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@keyframes aura-word-bloom {
+  0% {
+    opacity: 0.4;
+    transform: translateY(5px) scale(0.94);
+  }
+  60% {
+    opacity: 1;
+    transform: translateY(-4px) scale(1.07);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(-3px) scale(1.05);
+  }
+}
+
+.animate-aura-word-bloom {
+  animation: aura-word-bloom 0.3s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+@keyframes aura-aurora-float {
+  0%, 100% {
+    transform: translate3d(-6%, -4%, 0) scale(1);
+  }
+  50% {
+    transform: translate3d(7%, 6%, 0) scale(1.14);
+  }
+}
+
+.animate-aura-float {
+  animation: aura-aurora-float 11s ease-in-out infinite;
+}
+
+@keyframes aura-vinyl-pulse {
+  0%, 100% {
+    opacity: 0.35;
+    transform: scale(0.97);
+  }
+  50% {
+    opacity: 0.72;
+    transform: scale(1.06);
+  }
+}
+
+.animate-aura-vinyl-pulse {
+  animation: aura-vinyl-pulse 3.2s ease-in-out infinite;
+}
+
+/* =====================================================================
+   GLOBAL PRO TACTILE SPRING CLICKS & SPECULAR HOVER SHEEN
+   Uses CSS `scale` property so it composes cleanly without fighting `transform`
+   ===================================================================== */
+
+button:not(:disabled),
+[role="button"],
+.aura-interactive {
+  transition-property: scale, background-color, border-color, color, opacity, box-shadow, filter;
+  transition-duration: 0.22s;
+  transition-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+  transform-origin: center center;
+}
+
+button:not(:disabled):active,
+[role="button"]:active,
+.aura-interactive:active {
+  scale: 0.945;
+  filter: brightness(1.14);
+}
+
+button.oled-surface:not(:disabled):active,
+.aura-card-press:not(:disabled):active {
+  scale: 0.972;
+}
+
+.oled-pill:hover {
+  box-shadow:
+    0 12px 34px rgba(0, 0, 0, 0.88),
+    0 0 18px color-mix(in srgb, var(--aura-primary) 24%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.18);
+}
+
+.aura-card-sheen {
+  position: relative;
+  overflow: hidden;
+}
+
+.aura-card-sheen::after {
+  content: '';
+  position: absolute;
+  inset: -40% -80%;
+  background: linear-gradient(
+    115deg,
+    transparent 38%,
+    rgba(255, 255, 255, 0.08) 49%,
+    rgba(255, 255, 255, 0.16) 50%,
+    transparent 60%
+  );
+  transform: translate3d(-65%, 0, 0);
+  transition: transform 0.65s cubic-bezier(0.22, 1, 0.36, 1);
+  pointer-events: none;
+}
+
+.aura-card-sheen:hover::after {
+  transform: translate3d(65%, 0, 0);
+}
+
 .ease-apple {
   transition-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
 }

@@ -59,6 +59,7 @@ import { AmbientParticles } from './components/AmbientParticles';
 import { CompanionScreen } from './components/CompanionScreen';
 import { LyricsTimelineDrawer } from './components/LyricsTimelineDrawer';
 import { SpectrumHorizon } from './components/SpectrumHorizon';
+import { ClickPulseOverlay } from './components/ClickPulseOverlay';
 
 function fmtTime(sec: number): string {
   if (!isFinite(sec) || sec < 0) return '0:00';
@@ -105,6 +106,9 @@ const LYRIC_STYLES: Array<{ id: LyricStyleId; label: string }> = [
   { id: 'constellation', label: 'Constellation' },
   { id: 'branches', label: 'Branches' },
   { id: 'web', label: 'Web' },
+  { id: 'tunnel', label: 'Hyperwarp' },
+  { id: 'mirror', label: 'Prism' },
+  { id: 'glitch', label: 'Cyber' },
   { id: 'kinetic', label: 'Kinetic' },
   { id: 'liquid', label: 'Liquid' },
   { id: 'editorial', label: 'Serif' },
@@ -616,6 +620,7 @@ const AuraStage: React.FC = () => {
           if (changed) {
             root.style.setProperty('--aura-primary', rgbToHex(curP));
             root.style.setProperty('--aura-secondary', rgbToHex(curS));
+            root.style.setProperty('--aura-accent', s.blueprint.palette.accent);
           }
         }
       }
@@ -890,7 +895,12 @@ const AuraStage: React.FC = () => {
     activeLineIdx >= 0 &&
     activeSong.source !== 'live_tab' &&
     activeSong.source !== 'live_mic' &&
-    (blueprint.lyricStyle === 'constellation' || blueprint.lyricStyle === 'branches' || blueprint.lyricStyle === 'web');
+    (blueprint.lyricStyle === 'constellation' ||
+      blueprint.lyricStyle === 'branches' ||
+      blueprint.lyricStyle === 'web' ||
+      blueprint.lyricStyle === 'tunnel' ||
+      blueprint.lyricStyle === 'mirror' ||
+      blueprint.lyricStyle === 'glitch');
 
   const focusPct = focusRemaining !== null ? ((1500 - focusRemaining) / 1500) * 100 : 0;
 
@@ -916,9 +926,10 @@ const AuraStage: React.FC = () => {
         if (f) handleLocalFile(f);
       }}
     >
-      {/* Pure OLED Center Ambient Wash + Anti-Banding Film Micro-Grain */}
+      {/* Pure OLED Center Ambient Wash + Anti-Banding Film Micro-Grain + Global 120fps Click Pulse */}
       <div className="aura-oled-backdrop" />
       <div className="aura-film-grain" />
+      <ClickPulseOverlay />
 
       {/* 25-Min Focus Mode Ultra-Minimal Top Bezel Progress Line */}
       {focusRemaining !== null && (
@@ -1087,7 +1098,7 @@ const AuraStage: React.FC = () => {
                     key={song.id}
                     type="button"
                     onClick={() => void playSong(song, [song])}
-                    className="group oled-surface flex items-center gap-3 p-2.5 rounded-2xl hover:border-white/20 hover:-translate-y-0.5 transition-all duration-300 ease-apple text-left cursor-pointer"
+                    className="group oled-surface aura-card-sheen flex items-center gap-3 p-2.5 rounded-2xl hover:border-white/25 hover:-translate-y-0.5 transition-all duration-300 ease-apple text-left cursor-pointer"
                   >
                     <div
                       className="relative w-12 h-12 rounded-xl overflow-hidden bg-zinc-900 shrink-0 border border-white/10 transition-transform duration-300 group-hover:scale-105"
@@ -1262,7 +1273,7 @@ const AuraStage: React.FC = () => {
                     <div className="space-y-2">
                       <div className="flex items-center justify-between">
                         <span className="text-[10px] font-mono-code uppercase tracking-widest text-white/45">
-                          10 Signature Presets
+                          {VIBE_PRESETS.length} Signature Presets
                         </span>
                         <span className="text-[10px] text-white/35">1-Click Mood</span>
                       </div>
@@ -1274,7 +1285,7 @@ const AuraStage: React.FC = () => {
                               key={p.id}
                               type="button"
                               onClick={() => applyPreset(p.id)}
-                              className={`p-2 rounded-2xl text-left border transition-all cursor-pointer flex items-center gap-2.5 ${
+                              className={`aura-card-sheen aura-card-press p-2 rounded-2xl text-left border transition-all cursor-pointer flex items-center gap-2.5 ${
                                 active
                                   ? 'bg-white/[0.12] border-white/35'
                                   : 'bg-white/[0.03] hover:bg-white/[0.08] border-white/[0.06]'
@@ -1308,7 +1319,7 @@ const AuraStage: React.FC = () => {
                             type="text"
                             value={promptInput}
                             onChange={(e) => setPromptInput(e.target.value)}
-                            placeholder='e.g. "cyber samurai" or "monsoon blue"'
+                            placeholder='e.g. "hyperwarp" or "cyber samurai"'
                             className="flex-1 min-w-0 bg-transparent text-xs text-white placeholder:text-white/35 outline-none"
                           />
                         </div>
@@ -1329,9 +1340,9 @@ const AuraStage: React.FC = () => {
                   <div className="space-y-4">
                     <div className="space-y-1.5">
                       <div className="text-[10px] font-mono-code uppercase tracking-widest text-white/45">
-                        Visual World
+                        Visual World ({LYRIC_STYLES.length})
                       </div>
-                      <div className="grid grid-cols-3 gap-1.5">
+                      <div className="grid grid-cols-2 gap-1.5">
                         {LYRIC_STYLES.map((opt) => (
                           <button
                             key={opt.id}
@@ -1645,15 +1656,15 @@ const AuraStage: React.FC = () => {
             audioPulseRef={audioPulseRef}
           />
 
-          {/* Bottom Floating Dock + 7 Mode Pills */}
+          {/* Bottom Floating Dock + 10 Visual World Pills */}
           <div
-            className={`fixed bottom-5 left-1/2 -translate-x-1/2 z-30 w-[min(95vw,880px)] transition-all duration-700 ease-apple ${
+            className={`fixed bottom-5 left-1/2 -translate-x-1/2 z-30 w-[min(95vw,920px)] transition-all duration-700 ease-apple ${
               chromeVisible && !pureCinema
                 ? 'opacity-100 translate-y-0'
                 : 'opacity-0 translate-y-5 pointer-events-none'
             }`}
           >
-            {/* 7 Clean Visual World Pills */}
+            {/* 10 Visual World Pills */}
             <div className="flex items-center justify-center gap-1.5 mb-2 flex-wrap">
               {LYRIC_STYLES.map((opt) => {
                 const active = blueprint.lyricStyle === opt.id;
@@ -1662,7 +1673,7 @@ const AuraStage: React.FC = () => {
                     key={opt.id}
                     type="button"
                     onClick={() => updateVisualSetting({ lyricStyle: opt.id })}
-                    className={`px-3 py-1 rounded-full text-[11px] font-grotesk transition-all duration-300 ease-apple cursor-pointer ${
+                    className={`px-2.5 py-1 rounded-full text-[11px] font-grotesk transition-all duration-300 ease-apple cursor-pointer ${
                       active ? 'text-black font-semibold' : 'oled-pill text-white/65 hover:text-white'
                     }`}
                     style={active ? { backgroundColor: primary, boxShadow: `0 0 18px ${primary}77` } : undefined}

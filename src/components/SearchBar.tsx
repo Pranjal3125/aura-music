@@ -172,7 +172,7 @@ export const SearchBar: React.FC<SearchBarProps> = ({
               {results.map((song) => (
                 <div
                   key={song.id}
-                  className="px-3.5 py-2.5 flex items-center gap-3 hover:bg-white/[0.07] transition-colors group"
+                  className="aura-card-sheen px-3.5 py-2.5 flex items-center gap-3 hover:bg-white/[0.07] transition-colors group"
                 >
                   <button
                     type="button"

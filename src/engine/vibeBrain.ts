@@ -93,10 +93,13 @@ export function directSongAutonomously(params: {
     if (/\b(constellation|star|stars)\b/.test(low)) { lyricStyle = 'constellation'; particles = 'cosmos'; }
     else if (/\b(branch|branches|neural|lightning|tree)\b/.test(low)) { lyricStyle = 'branches'; }
     else if (/\b(web|spider|haze)\b/.test(low)) { lyricStyle = 'web'; }
-    else if (/\b(kinetic|slam|trap|rage|rap|samurai|phonk)\b/.test(low)) { lyricStyle = 'kinetic'; showSpectrum = true; }
+    else if (/\b(tunnel|warp|hyper|space|orbit|3d|vortex|galaxy)\b/.test(low)) { lyricStyle = 'tunnel'; particles = 'cosmos'; }
+    else if (/\b(mirror|prism|chrome|stage|concert|stadium|laser)\b/.test(low)) { lyricStyle = 'mirror'; showSpectrum = true; }
+    else if (/\b(glitch|cyber|katana|samurai|phonk|matrix|synth)\b/.test(low)) { lyricStyle = 'glitch'; showSpectrum = true; }
+    else if (/\b(kinetic|slam|trap|rage|rap)\b/.test(low)) { lyricStyle = 'kinetic'; showSpectrum = true; }
     else if (/\b(liquid|apple|glass|blur)\b/.test(low)) { lyricStyle = 'liquid'; }
     else if (/\b(editorial|serif|poetic|rain|monsoon|lofi)\b/.test(low)) { lyricStyle = 'editorial'; }
-    else if (/\b(code|terminal|hacker|matrix)\b/.test(low)) { lyricStyle = 'codestyle'; }
+    else if (/\b(code|terminal|hacker)\b/.test(low)) { lyricStyle = 'codestyle'; }
     if (/\b(rain|monsoon|sad)\b/.test(low)) particles = 'rain';
     if (/\b(spectrum|bars|visualizer|eq)\b/.test(low)) showSpectrum = true;
   }
@@ -133,7 +136,7 @@ const GEMINI_SCHEMA = {
     },
     lyricStyle: {
       type: 'string',
-      enum: ['constellation', 'branches', 'web', 'kinetic', 'liquid', 'editorial', 'codestyle'],
+      enum: ['constellation', 'branches', 'web', 'tunnel', 'mirror', 'glitch', 'kinetic', 'liquid', 'editorial', 'codestyle'],
     },
     edgeStyle: { type: 'string', enum: ['lumn_vivid', 'laser_orbit', 'breathing_aura'] },
     particles: { type: 'string', enum: ['cosmos', 'rain', 'embers', 'none'] },
@@ -166,7 +169,7 @@ export async function directSongWithGemini(params: {
   const lyricsSample = lyrics.slice(0, 12).map((l) => l.text).join('\n');
 
   const prompt = `You are AURA, an ultra-luxury dark-room music aesthetic director (Verci + Lumn on pitch-black OLED).
-Pick the exact vibrant neon palette, lyric visual world (constellation | branches | web | kinetic | liquid | editorial | codestyle), edge lighting style, atmosphere, and whether bottom spectrum bars fit this track:
+Pick the exact vibrant neon palette, lyric visual world (constellation | branches | web | tunnel | mirror | glitch | kinetic | liquid | editorial | codestyle), edge lighting style, atmosphere, and whether bottom spectrum bars fit this track:
 
 Song: "${song.title}" by "${song.artist}" (Album: "${song.album}")
 ${userPrompt ? `User creative prompt: "${userPrompt}"` : ''}

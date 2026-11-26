@@ -8,8 +8,13 @@ export interface AudioPulseState {
   spectrum: Float32Array;
 }
 
+export type CanvasLyricMode = Extract<
+  LyricStyleId,
+  'constellation' | 'branches' | 'web' | 'tunnel' | 'mirror' | 'glitch'
+>;
+
 interface CosmosLyricsCanvasProps {
-  mode: Extract<LyricStyleId, 'constellation' | 'branches' | 'web'>;
+  mode: CanvasLyricMode;
   lyrics: LyricLine[];
   activeLineIdx: number;
   activeWordIdx: number;
@@ -43,6 +48,41 @@ interface BgStar {
   tint: boolean;
 }
 
+interface WarpStar {
+  x: number;
+  y: number;
+  z: number;
+  pz: number;
+  speed: number;
+  tint: boolean;
+}
+
+interface MatrixCol {
+  xNorm: number;
+  y: number;
+  speed: number;
+  seed: number;
+}
+
+interface Shockwave {
+  x: number;
+  y: number;
+  maxR: number;
+  life: number;
+  maxLife: number;
+  lineWidth: number;
+  warm: boolean;
+}
+
+interface Comet {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  life: number;
+  maxLife: number;
+}
+
 interface Spark {
   x: number;
   y: number;
@@ -53,6 +93,8 @@ interface Spark {
   size: number;
   warm: boolean;
 }
+
+const MATRIX_GLYPHS = 'アイウエオカキクケコサシスセソタチツテト0197FX#<>';
 
 function seeded(seed: number): number {
   const x = Math.sin(seed * 127.1 + 311.7) * 43758.5453123;
@@ -212,6 +254,10 @@ export const CosmosLyricsCanvas: React.FC<CosmosLyricsCanvasProps> = ({
     const ctx = canvas.getContext('2d', { alpha: true });
     if (!ctx) return;
 
+    // Reusable offscreen buffer for Prism Mirror liquid floor reflection (0 per-frame allocation)
+    const reflCanvas = document.createElement('canvas');
+    const reflCtx = reflCanvas.getContext('2d');
+
     let w = window.innerWidth;
     let h = window.innerHeight;
     let dpr = Math.min(window.devicePixelRatio || 1, 1.5);
@@ -223,6 +269,9 @@ export const CosmosLyricsCanvas: React.FC<CosmosLyricsCanvasProps> = ({
       canvas.width = Math.max(1, Math.floor(w * dpr));
       canvas.height = Math.max(1, Math.floor(h * dpr));
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+      reflCanvas.width = Math.max(1, Math.floor(w));
+      reflCanvas.height = 140;
     };
     resize();
     window.addEventListener('resize', resize);
@@ -236,13 +285,38 @@ export const CosmosLyricsCanvas: React.FC<CosmosLyricsCanvasProps> = ({
       tint: i % 4 === 0,
     }));
 
+    const warpStars: WarpStar[] = Array.from({ length: 155 }, (_, i) => {
+      const ang = seeded(i * 19 + 5) * Math.PI * 2;
+      const rad = 0.08 + seeded(i * 29 + 11) * 1.15;
+      const z = 0.12 + seeded(i * 43 + 17) * 1.55;
+      return {
+        x: Math.cos(ang) * rad,
+        y: Math.sin(ang) * rad,
+        z,
+        pz: z,
+        speed: 0.6 + seeded(i * 61 + 3) * 1.1,
+        tint: i % 3 === 0,
+      };
+    });
+
+    const matrixCols: MatrixCol[] = Array.from({ length: 30 }, (_, i) => ({
+      xNorm: (i + 0.5) / 30,
+      y: seeded(i * 37 + 9) * 1.2,
+      speed: 0.14 + seeded(i * 53 + 13) * 0.24,
+      seed: i * 17 + 3,
+    }));
+
     const sparks: Spark[] = [];
+    const shockwaves: Shockwave[] = [];
+    const comets: Comet[] = [];
 
     let camX = 0;
     let camY = 0;
     let camVx = 0;
     let camVy = 0;
     let camInitialized = false;
+    let smoothGlobal = 0;
+    let smoothGlobalInit = false;
 
     const curP: [number, number, number] = hexToRgb(stateRef.current.palette.primary);
     const curS: [number, number, number] = hexToRgb(stateRef.current.palette.secondary);
@@ -251,8 +325,24 @@ export const CosmosLyricsCanvas: React.FC<CosmosLyricsCanvasProps> = ({
     let lastActiveGlobal = -1;
     let webRipple = 0;
     let webCenterScale = 1;
+    let glitchSpike = 0;
+    let lastCometMs = 0;
+    let lastBeatRingMs = 0;
     let prevNow = performance.now();
     let rafId = 0;
+
+    const spawnShockwave = (x: number, y: number, maxR: number, warm: boolean, lw = 2) => {
+      shockwaves.push({
+        x,
+        y,
+        maxR,
+        life: 0,
+        maxLife: 0.72,
+        lineWidth: lw,
+        warm,
+      });
+      if (shockwaves.length > 14) shockwaves.splice(0, shockwaves.length - 14);
+    };
 
     const render = (now: number) => {
       const dt = Math.min(0.05, Math.max(0.001, (now - prevNow) * 0.001));
@@ -303,7 +393,6 @@ export const CosmosLyricsCanvas: React.FC<CosmosLyricsCanvasProps> = ({
           camVy = 0;
           camInitialized = true;
         } else {
-          // Snappy critically-damped spring: settles cleanly right on beat (~160ms) without dragging behind vocals
           const stiffness = 28;
           const damping = 10.6;
           const ax = (lookX - camX) * stiffness - camVx * damping;
@@ -313,43 +402,129 @@ export const CosmosLyricsCanvas: React.FC<CosmosLyricsCanvasProps> = ({
           camX += camVx * dt;
           camY += camVy * dt;
         }
+
+        if (!smoothGlobalInit || Math.abs(activeGlobal - smoothGlobal) > 4.5) {
+          smoothGlobal = activeGlobal;
+          smoothGlobalInit = true;
+        } else {
+          smoothGlobal += (activeGlobal - smoothGlobal) * (1 - Math.exp(-9.5 * dt));
+        }
       } else {
         camInitialized = false;
+        smoothGlobalInit = false;
       }
+
+      const cxScreen = w * 0.5;
+      const cyScreen = h * 0.48;
 
       if (activeGlobal !== lastActiveGlobal && activeGlobal >= 0) {
         lastActiveGlobal = activeGlobal;
         webRipple = 1;
-        webCenterScale = 0.86;
+        webCenterScale = 0.84;
+        glitchSpike = 1;
 
         const node = world[activeGlobal];
         if (node) {
-          const sx = w * 0.5 + (node.wx - camX);
-          const sy = h * 0.48 + (node.wy - camY);
-          const count = 12;
+          const sx = st.mode === 'constellation' || st.mode === 'branches' ? cxScreen + (node.wx - camX) : cxScreen;
+          const sy = st.mode === 'constellation' || st.mode === 'branches' ? cyScreen + (node.wy - camY) : cyScreen;
+          const count = st.mode === 'tunnel' || st.mode === 'glitch' ? 16 : 12;
           for (let i = 0; i < count; i++) {
             const ang = (i / count) * Math.PI * 2 + Math.random() * 0.45;
-            const spd = 28 + Math.random() * 75;
+            const spd = (st.mode === 'tunnel' ? 60 : 32) + Math.random() * 88;
             sparks.push({
-              x: st.mode === 'web' ? w * 0.5 : sx,
-              y: st.mode === 'web' ? h * 0.48 : sy,
+              x: sx,
+              y: sy,
               vx: Math.cos(ang) * spd,
               vy: Math.sin(ang) * spd,
               life: 0,
               maxLife: 0.55 + Math.random() * 0.45,
-              size: 1.2 + Math.random() * 1.9,
+              size: 1.3 + Math.random() * 2.1,
               warm: i % 2 === 0,
             });
           }
-          if (sparks.length > 84) sparks.splice(0, sparks.length - 84);
+          if (sparks.length > 96) sparks.splice(0, sparks.length - 96);
+
+          spawnShockwave(sx, sy, Math.min(w, h) * (st.mode === 'tunnel' ? 0.34 : 0.2), true, 2.2);
         }
+      }
+
+      // Secondary heavy bass beat shockwave on high hits
+      if (pulse.beat > 0.72 && now - lastBeatRingMs > 300) {
+        lastBeatRingMs = now;
+        spawnShockwave(cxScreen, cyScreen, Math.min(w, h) * 0.36, false, 1.4);
+      }
+
+      // Occasional subtle shooting meteor comet in cosmos modes
+      if (
+        st.particleMode !== 'none' &&
+        (st.mode === 'constellation' || st.mode === 'branches' || st.mode === 'mirror') &&
+        now - lastCometMs > 3200
+      ) {
+        lastCometMs = now;
+        const startLeft = seeded(now) > 0.4;
+        comets.push({
+          x: startLeft ? -80 : w * (0.3 + seeded(now * 0.3) * 0.5),
+          y: -40,
+          vx: (startLeft ? 1 : -1) * (420 + seeded(now * 0.7) * 280),
+          vy: 260 + seeded(now * 1.1) * 180,
+          life: 0,
+          maxLife: 1.05,
+        });
       }
 
       webRipple *= Math.exp(-3.2 * dt);
       webCenterScale += (1 - webCenterScale) * (1 - Math.exp(-9.5 * dt));
+      glitchSpike *= Math.exp(-7.5 * dt);
 
-      // LAYER 1: Parallax Starfield / Rain / Embers
-      if (st.particleMode !== 'none') {
+      // LAYER 1: Ambient Starfield / Warp Tunnel / Matrix Rain
+      if (st.mode === 'tunnel') {
+        const speedMult = 0.65 + pulse.bass * 2.25 + pulse.beat * 0.9;
+        ctx.save();
+        ctx.globalCompositeOperation = 'lighter';
+        for (let i = 0; i < warpStars.length; i++) {
+          const ws = warpStars[i];
+          ws.pz = ws.z;
+          ws.z -= dt * ws.speed * speedMult;
+          if (ws.z <= 0.06) {
+            ws.z = 1.65;
+            ws.pz = ws.z;
+          }
+          const sx = cxScreen + (ws.x / ws.z) * w * 0.56;
+          const sy = cyScreen + (ws.y / ws.z) * h * 0.56;
+          const px = cxScreen + (ws.x / ws.pz) * w * 0.56;
+          const py = cyScreen + (ws.y / ws.pz) * h * 0.56;
+          const depthAlpha = Math.max(0, Math.min(0.9, (1.65 - ws.z) * 0.55));
+          ctx.strokeStyle = rgba(ws.tint ? curP : curA, depthAlpha * 0.75);
+          ctx.lineWidth = Math.max(0.7, (1.7 - ws.z) * 1.85);
+          ctx.beginPath();
+          ctx.moveTo(px, py);
+          ctx.lineTo(sx, sy);
+          ctx.stroke();
+        }
+        ctx.restore();
+      } else if (st.mode === 'glitch') {
+        ctx.save();
+        ctx.font = '600 12px "JetBrains Mono", monospace';
+        ctx.textAlign = 'center';
+        const bassBoost = 1 + pulse.bass * 2.4;
+        for (let i = 0; i < matrixCols.length; i++) {
+          const col = matrixCols[i];
+          col.y += dt * col.speed * bassBoost;
+          if (col.y > 1.25) col.y = -0.2;
+          const x = col.xNorm * w;
+          const headY = col.y * h;
+          for (let k = 0; k < 7; k++) {
+            const gy = headY - k * 18;
+            if (gy < -20 || gy > h + 20) continue;
+            const chIdx = Math.floor((col.seed + Math.floor(t * 9) + k * 7) % MATRIX_GLYPHS.length);
+            const ch = MATRIX_GLYPHS[Math.abs(chIdx)];
+            const fade = (1 - k / 7) * (k === 0 ? 0.42 : 0.16);
+            ctx.fillStyle = k === 0 ? rgba(curA, fade) : rgba(i % 2 === 0 ? curP : curS, fade);
+            ctx.fillText(ch, x, gy);
+          }
+        }
+        ctx.restore();
+      } else if (st.particleMode !== 'none') {
         for (let i = 0; i < bgStars.length; i++) {
           const s = bgStars[i];
           if (st.particleMode === 'rain') {
@@ -379,20 +554,51 @@ export const CosmosLyricsCanvas: React.FC<CosmosLyricsCanvasProps> = ({
         }
       }
 
-      // LAYER 2: Constellation / Branches / Web
-      if (activeGlobal >= 0 && world.length > 0 && sprites) {
-        const cxScreen = w * 0.5;
-        const cyScreen = h * 0.48;
-
-        // Subtle atmospheric nebula behind the active focal star (adds 3D depth with zero lag)
+      // Shooting Comets
+      if (comets.length > 0) {
         ctx.save();
         ctx.globalCompositeOperation = 'lighter';
-        const nebR = Math.min(w, h) * 0.34 + pulse.bass * 48;
-        ctx.globalAlpha = 0.08 + pulse.bass * 0.05;
+        for (let i = comets.length - 1; i >= 0; i--) {
+          const cm = comets[i];
+          cm.life += dt;
+          if (cm.life >= cm.maxLife) {
+            comets.splice(i, 1);
+            continue;
+          }
+          cm.x += cm.vx * dt;
+          cm.y += cm.vy * dt;
+          const fade = Math.sin((cm.life / cm.maxLife) * Math.PI);
+          const tailX = cm.x - cm.vx * 0.18;
+          const tailY = cm.y - cm.vy * 0.18;
+          const g = ctx.createLinearGradient(tailX, tailY, cm.x, cm.y);
+          g.addColorStop(0, rgba(curP, 0));
+          g.addColorStop(1, rgba(curA, fade * 0.72));
+          ctx.strokeStyle = g;
+          ctx.lineWidth = 1.8;
+          ctx.beginPath();
+          ctx.moveTo(tailX, tailY);
+          ctx.lineTo(cm.x, cm.y);
+          ctx.stroke();
+        }
+        ctx.restore();
+      }
+
+      // LAYER 2: 6 Flagship Canvas Worlds
+      if (activeGlobal >= 0 && world.length > 0 && sprites) {
+        ctx.save();
+        ctx.globalCompositeOperation = 'lighter';
+        const nebR = Math.min(w, h) * 0.34 + pulse.bass * 52;
+        ctx.globalAlpha = 0.08 + pulse.bass * 0.06;
         ctx.drawImage(sprites.primary, cxScreen - nebR, cyScreen - nebR, nebR * 2, nebR * 2);
         ctx.restore();
 
         if (st.mode === 'constellation' || st.mode === 'branches') {
+          const breath = 1 + pulse.bass * 0.032;
+          ctx.save();
+          ctx.translate(cxScreen, cyScreen);
+          ctx.scale(breath, breath);
+          ctx.translate(-cxScreen, -cyScreen);
+
           const windowStart = Math.max(0, activeGlobal - 15);
           const windowEnd = Math.min(world.length - 1, activeGlobal + 9);
 
@@ -465,11 +671,21 @@ export const CosmosLyricsCanvas: React.FC<CosmosLyricsCanvasProps> = ({
                 const c1y = ay + (ctrlY - ay) * drawFrac;
 
                 ctx.strokeStyle = rgba(curP, Math.min(0.95, fade * 0.38 + segGlow * 0.62));
-                ctx.lineWidth = 1.2 + segGlow * (1.5 + pulse.beat * 0.9);
+                ctx.lineWidth = 1.2 + segGlow * (1.6 + pulse.beat * 0.9);
                 ctx.beginPath();
                 ctx.moveTo(ax, ay);
                 ctx.quadraticCurveTo(c1x, c1y, qx, qy);
                 ctx.stroke();
+
+                // Flowing synapse energy impulse along branch
+                if (b.glow > 0.25) {
+                  const orbT = (t * 1.9 + a.seed * 0.1) % 1;
+                  const ox = (1 - orbT) * (1 - orbT) * ax + 2 * (1 - orbT) * orbT * ctrlX + orbT * orbT * bx;
+                  const oy = (1 - orbT) * (1 - orbT) * ay + 2 * (1 - orbT) * orbT * ctrlY + orbT * orbT * by;
+                  ctx.globalCompositeOperation = 'lighter';
+                  const or = 12 + pulse.beat * 8;
+                  ctx.drawImage(sprites.accent, ox - or, oy - or, or * 2, or * 2);
+                }
 
                 if (drawFrac < 0.98) {
                   ctx.globalCompositeOperation = 'lighter';
@@ -538,6 +754,25 @@ export const CosmosLyricsCanvas: React.FC<CosmosLyricsCanvasProps> = ({
                 const coreR = 14 + g * (16 + pulse.beat * 10);
                 ctx.globalAlpha = g * 0.9;
                 ctx.drawImage(sprites.accent, sx - coreR, sy - coreR, coreR * 2, coreR * 2);
+
+                // Sprouting neural micro-tendrils around active Branches focal node
+                if (st.mode === 'branches') {
+                  for (let k = 0; k < 3; k++) {
+                    const ang = k * 2.1 + node.seed;
+                    const len = 26 + pulse.beat * 14;
+                    ctx.strokeStyle = rgba(curP, g * 0.45);
+                    ctx.lineWidth = 0.9;
+                    ctx.beginPath();
+                    ctx.moveTo(sx, sy);
+                    ctx.quadraticCurveTo(
+                      sx + Math.cos(ang + 0.4) * len * 0.55,
+                      sy + Math.sin(ang + 0.4) * len * 0.55,
+                      sx + Math.cos(ang) * len,
+                      sy + Math.sin(ang) * len
+                    );
+                    ctx.stroke();
+                  }
+                }
               }
               ctx.restore();
             }
@@ -585,8 +820,9 @@ export const CosmosLyricsCanvas: React.FC<CosmosLyricsCanvasProps> = ({
             ctx.fillText(node.text, 0, 0);
             ctx.restore();
           }
-        } else {
-          // MODE 3: SILKY LUMINOUS WEB
+          ctx.restore();
+        } else if (st.mode === 'web') {
+          // MODE 3: SILKY LUMINOUS WEB + SACRED GEOMETRY RING
           const line = st.lyrics[st.activeLineIdx];
           if (line && line.words.length > 0) {
             const words = line.words;
@@ -598,8 +834,8 @@ export const CosmosLyricsCanvas: React.FC<CosmosLyricsCanvasProps> = ({
             for (let s = 0; s < spokes; s++) {
               const ang = (s / spokes) * Math.PI * 2 - Math.PI * 0.5 + Math.sin(t * 0.22) * 0.04;
               const isActSpoke = s === st.activeWordIdx % spokes;
-              ctx.strokeStyle = isActSpoke ? rgba(curP, 0.74) : rgba(curA, 0.09 + pulse.bass * 0.07);
-              ctx.lineWidth = isActSpoke ? 1.5 : 0.75;
+              ctx.strokeStyle = isActSpoke ? rgba(curP, 0.78) : rgba(curA, 0.09 + pulse.bass * 0.07);
+              ctx.lineWidth = isActSpoke ? 1.6 : 0.75;
               ctx.beginPath();
               ctx.moveTo(cxScreen, cyScreen);
               ctx.lineTo(cxScreen + Math.cos(ang) * maxR, cyScreen + Math.sin(ang) * maxR);
@@ -623,6 +859,20 @@ export const CosmosLyricsCanvas: React.FC<CosmosLyricsCanvasProps> = ({
               ctx.closePath();
               ctx.stroke();
             }
+
+            // Counter-rotating sacred polygon resonance around core
+            const polyR = maxR * 0.32 * (1 + pulse.beat * 0.14);
+            ctx.strokeStyle = rgba(curS, 0.22 + pulse.beat * 0.3);
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            for (let v = 0; v <= 6; v++) {
+              const pa = (v / 6) * Math.PI * 2 - t * 0.35;
+              const px = cxScreen + Math.cos(pa) * polyR;
+              const py = cyScreen + Math.sin(pa) * polyR;
+              if (v === 0) ctx.moveTo(px, py);
+              else ctx.lineTo(px, py);
+            }
+            ctx.stroke();
 
             const wordRingR = maxR * 0.66;
             words.forEach((wd, i) => {
@@ -675,10 +925,372 @@ export const CosmosLyricsCanvas: React.FC<CosmosLyricsCanvasProps> = ({
             }
             ctx.restore();
           }
+        } else if (st.mode === 'tunnel') {
+          // MODE 4: HYPERWARP 3D — 3D Perspective Deep-Space Lyric Flight + Stereoscopic Echo
+          const minDim = Math.min(w, h);
+
+          // Concentric hyperdrive portal rings
+          ctx.save();
+          ctx.globalCompositeOperation = 'lighter';
+          for (let r = 0; r < 5; r++) {
+            const prog = (r / 5 + t * 0.35) % 1;
+            const ringR = (0.08 + Math.pow(prog, 1.9) * 0.65) * minDim * (1 + pulse.bass * 0.14);
+            const alpha = Math.sin(prog * Math.PI) * (0.14 + pulse.beat * 0.14);
+            ctx.strokeStyle = rgba(r % 2 === 0 ? curP : curS, alpha);
+            ctx.lineWidth = 1.2 + prog * 1.4;
+            ctx.beginPath();
+            ctx.arc(cxScreen, cyScreen, ringR, 0, Math.PI * 2);
+            ctx.stroke();
+          }
+          ctx.restore();
+
+          // Render back-to-front so active hero word sits crisp in foreground
+          const wStart = Math.max(0, activeGlobal - 2);
+          const wEnd = Math.min(world.length - 1, activeGlobal + 7);
+          const focalBase = Math.min(54, Math.max(34, w * 0.045));
+
+          for (let i = wEnd; i >= wStart; i--) {
+            const node = world[i];
+            const rel = i - smoothGlobal;
+            const z = Math.max(0.24, 1 + rel * 0.68);
+            const proj = 1 / z;
+
+            // Spiral gently through deep space; pull factor zeroes at active center
+            const spiralPull = Math.min(1, Math.abs(rel) * 1.05);
+            const spiralAng = i * 1.18 + t * 0.24;
+            const worldOffX = Math.cos(spiralAng) * 240 * spiralPull * Math.sign(rel || 1);
+            const worldOffY = Math.sin(spiralAng) * 155 * spiralPull;
+
+            const sx = cxScreen + worldOffX * proj;
+            const sy = cyScreen + worldOffY * proj;
+
+            const alpha =
+              rel < -0.55
+                ? Math.max(0, 1 - (-0.55 - rel) * 1.15)
+                : Math.max(0.05, 1 - Math.max(0, rel) / 7.5);
+            if (alpha <= 0.03) continue;
+
+            const isHero = Math.abs(rel) < 0.45;
+            const fontPx = focalBase * proj * (isHero ? 1 + pulse.beat * 0.07 : 0.72);
+            if (fontPx < 8 || fontPx > 260) continue;
+
+            ctx.save();
+            ctx.translate(sx, sy);
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.font = `${isHero ? 800 : 600} ${fontPx.toFixed(1)}px "Syne", sans-serif`;
+
+            if (isHero) {
+              const heroFocus = 1 - Math.abs(rel) / 0.45;
+              // Radial bloom sprite + segmented HUD reticle
+              ctx.save();
+              ctx.globalCompositeOperation = 'lighter';
+              const hr = 110 + pulse.bass * 45;
+              ctx.globalAlpha = 0.55 * heroFocus;
+              ctx.drawImage(sprites.primary, -hr, -hr, hr * 2, hr * 2);
+
+              ctx.rotate(t * 0.4);
+              ctx.setLineDash([14, 10]);
+              ctx.strokeStyle = rgba(curP, 0.36 * heroFocus);
+              ctx.lineWidth = 1.4;
+              ctx.beginPath();
+              ctx.arc(0, 0, minDim * 0.21 + pulse.beat * 14, 0, Math.PI * 2);
+              ctx.stroke();
+              ctx.restore();
+
+              // 3D Stereoscopic chromatic split
+              const split = 2.5 + pulse.beat * 5.5;
+              ctx.fillStyle = rgba(curP, 0.52 * alpha * heroFocus);
+              ctx.fillText(node.text, -split, 1.5);
+              ctx.fillStyle = rgba(curS, 0.52 * alpha * heroFocus);
+              ctx.fillText(node.text, split, -1.5);
+            }
+
+            ctx.fillStyle = isHero
+              ? rgba(curA, Math.min(1, alpha))
+              : rgba(i % 2 === 0 ? curA : curP, alpha * 0.78);
+            ctx.fillText(node.text, 0, 0);
+            ctx.restore();
+          }
+        } else if (st.mode === 'mirror') {
+          // MODE 5: PRISM STAGE MIRROR — Concert Beams + Chrome Horizon + Liquid Floor Reflection
+          const line = st.lyrics[st.activeLineIdx];
+          if (line && line.words.length > 0) {
+            const horizonY = h * 0.53;
+
+            // Volumetric overhead stage light cones
+            ctx.save();
+            ctx.globalCompositeOperation = 'lighter';
+            const beamSources = [0.16, 0.37, 0.63, 0.84];
+            beamSources.forEach((bxNorm, bIdx) => {
+              const bx = bxNorm * w;
+              const sway = Math.sin(t * (0.65 + bIdx * 0.12) + bIdx * 1.4) * (w * 0.08);
+              const tx = cxScreen + sway + (bxNorm - 0.5) * w * 0.18;
+              const spread = 52 + pulse.beat * 36;
+              const bg = ctx.createLinearGradient(bx, -20, tx, horizonY);
+              const beamCol = bIdx % 2 === 0 ? curP : curS;
+              bg.addColorStop(0, rgba(beamCol, 0.16 + pulse.beat * 0.12));
+              bg.addColorStop(1, rgba(beamCol, 0));
+              ctx.fillStyle = bg;
+              ctx.beginPath();
+              ctx.moveTo(bx - 12, -20);
+              ctx.lineTo(bx + 12, -20);
+              ctx.lineTo(tx + spread, horizonY);
+              ctx.lineTo(tx - spread, horizonY);
+              ctx.closePath();
+              ctx.fill();
+            });
+            ctx.restore();
+
+            // Laser Horizon Plane + Symmetric Equalizer Teeth
+            ctx.save();
+            const hGrad = ctx.createLinearGradient(w * 0.06, horizonY, w * 0.94, horizonY);
+            hGrad.addColorStop(0, rgba(curP, 0));
+            hGrad.addColorStop(0.25, rgba(curP, 0.55));
+            hGrad.addColorStop(0.5, rgba(curA, 0.85));
+            hGrad.addColorStop(0.75, rgba(curS, 0.55));
+            hGrad.addColorStop(1, rgba(curS, 0));
+            ctx.strokeStyle = hGrad;
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            ctx.moveTo(w * 0.06, horizonY);
+            ctx.lineTo(w * 0.94, horizonY);
+            ctx.stroke();
+
+            const spec = pulse.spectrum;
+            const teeth = 24;
+            const step = (w * 0.36) / teeth;
+            for (let k = 0; k < teeth; k++) {
+              const amp = (spec[k] || 0) * (36 + pulse.bass * 18);
+              ctx.fillStyle = rgba(k % 2 === 0 ? curP : curS, 0.28 + (spec[k] || 0) * 0.5);
+              ctx.fillRect(cxScreen + k * step, horizonY - amp, 2.2, amp);
+              ctx.fillRect(cxScreen - (k + 1) * step, horizonY - amp, 2.2, amp);
+              ctx.globalAlpha = 0.25;
+              ctx.fillRect(cxScreen + k * step, horizonY, 2.2, amp * 0.65);
+              ctx.fillRect(cxScreen - (k + 1) * step, horizonY, 2.2, amp * 0.65);
+              ctx.globalAlpha = 1;
+            }
+            ctx.restore();
+
+            // Measure words & auto-fit nicely inside viewport
+            const words = line.words;
+            const rawFontPx = Math.min(48, Math.max(24, w * 0.036));
+            ctx.font = `700 ${rawFontPx}px "Space Grotesk", sans-serif`;
+            const gap = 16;
+            const widths = words.map((wd) => ctx.measureText(wd.text).width);
+            const totalW = widths.reduce((a, b) => a + b, 0) + gap * Math.max(0, words.length - 1);
+            const fitScale = Math.min(1, (w * 0.86) / Math.max(1, totalW));
+            const fontPx = rawFontPx * fitScale;
+            const scaledGap = gap * fitScale;
+            ctx.font = `700 ${fontPx.toFixed(1)}px "Space Grotesk", sans-serif`;
+            const scaledWidths = words.map((wd) => ctx.measureText(wd.text).width);
+            const finalTotalW =
+              scaledWidths.reduce((a, b) => a + b, 0) + scaledGap * Math.max(0, words.length - 1);
+
+            let cursorX = cxScreen - finalTotalW * 0.5;
+            const baselineY = horizonY - 40;
+
+            if (reflCtx) {
+              reflCtx.clearRect(0, 0, reflCanvas.width, reflCanvas.height);
+              reflCtx.font = `700 ${fontPx.toFixed(1)}px "Space Grotesk", sans-serif`;
+              reflCtx.textAlign = 'left';
+              reflCtx.textBaseline = 'bottom';
+            }
+
+            words.forEach((wd, idx) => {
+              const ww = scaledWidths[idx];
+              const isAct = idx === st.activeWordIdx;
+              const isSung = idx < st.activeWordIdx;
+              const wordY = baselineY - (isAct ? 9 + pulse.beat * 6 : 0);
+
+              if (isAct) {
+                ctx.save();
+                ctx.globalCompositeOperation = 'lighter';
+                const wr = 74 + pulse.beat * 28;
+                ctx.drawImage(sprites.primary, cursorX + ww * 0.5 - wr, wordY - fontPx * 0.45 - wr, wr * 2, wr * 2);
+                ctx.restore();
+              }
+
+              ctx.save();
+              ctx.textAlign = 'left';
+              ctx.textBaseline = 'bottom';
+              ctx.font = `700 ${fontPx.toFixed(1)}px "Space Grotesk", sans-serif`;
+              const col = isAct
+                ? rgba(curA, 1)
+                : isSung
+                  ? rgba(curP, 0.88)
+                  : 'rgba(255,255,255,0.28)';
+              ctx.fillStyle = col;
+              ctx.fillText(wd.text, cursorX, wordY);
+
+              // Also mirror onto scratch buffer near bottom for wave slicing
+              if (reflCtx) {
+                reflCtx.fillStyle = col;
+                reflCtx.fillText(wd.text, cursorX, reflCanvas.height - (isAct ? 12 : 4));
+              }
+              ctx.restore();
+
+              cursorX += ww + scaledGap;
+            });
+
+            // Liquid rippled floor reflection below horizonY
+            if (reflCtx) {
+              const strips = 14;
+              const srcH = Math.min(115, fontPx * 1.45);
+              const srcTop = reflCanvas.height - srcH;
+              const stripSrcH = srcH / strips;
+              const destH = srcH * 0.72;
+              const stripDestH = destH / strips;
+
+              ctx.save();
+              for (let s = 0; s < strips; s++) {
+                const waveOffset = Math.sin(t * 5.2 + s * 0.75) * (1.2 + pulse.bass * 4.5) * (s / strips);
+                const stripFade = Math.pow(1 - s / strips, 1.35) * 0.42;
+                ctx.globalAlpha = stripFade;
+
+                // Flip each strip smoothly down the obsidian glass floor
+                ctx.save();
+                ctx.translate(waveOffset, horizonY + 8 + s * stripDestH);
+                ctx.scale(1, -1);
+                ctx.drawImage(
+                  reflCanvas,
+                  0,
+                  srcTop + srcH - (s + 1) * stripSrcH,
+                  reflCanvas.width,
+                  stripSrcH,
+                  0,
+                  -stripDestH,
+                  w,
+                  stripDestH
+                );
+                ctx.restore();
+              }
+              ctx.restore();
+            }
+          }
+        } else if (st.mode === 'glitch') {
+          // MODE 6: CYBER GLITCH — Holographic RGB Chromatic Split + Targeting Reticle
+          const line = st.lyrics[st.activeLineIdx];
+          const prevL = st.activeLineIdx > 0 ? st.lyrics[st.activeLineIdx - 1] : null;
+          const nextL = st.activeLineIdx < st.lyrics.length - 1 ? st.lyrics[st.activeLineIdx + 1] : null;
+          const heroWord = (line?.words[Math.max(0, st.activeWordIdx)]?.text || line?.text || '').toUpperCase();
+
+          // Cyberpunk Tactical HUD Reticle framing center
+          const boxW = Math.min(w * 0.86, 680);
+          const boxH = Math.min(h * 0.34, 210);
+          const lx = cxScreen - boxW * 0.5;
+          const rx = cxScreen + boxW * 0.5;
+          const ty = cyScreen - boxH * 0.5;
+          const by = cyScreen + boxH * 0.5;
+          const corner = 22;
+
+          ctx.save();
+          ctx.strokeStyle = rgba(curP, 0.38 + pulse.beat * 0.32);
+          ctx.lineWidth = 1.6;
+          ctx.beginPath();
+          // Top-Left, Top-Right, Bottom-Left, Bottom-Right L-Brackets
+          ctx.moveTo(lx, ty + corner); ctx.lineTo(lx, ty); ctx.lineTo(lx + corner, ty);
+          ctx.moveTo(rx - corner, ty); ctx.lineTo(rx, ty); ctx.lineTo(rx, ty + corner);
+          ctx.moveTo(lx, by - corner); ctx.lineTo(lx, by); ctx.lineTo(lx + corner, by);
+          ctx.moveTo(rx - corner, by); ctx.lineTo(rx, by); ctx.lineTo(rx, by - corner);
+          ctx.stroke();
+
+          // Context lines
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.font = '500 13px "JetBrains Mono", monospace';
+          if (prevL) {
+            ctx.fillStyle = rgba(curA, 0.25);
+            ctx.fillText(`0x01 // ${prevL.text}`, cxScreen, ty - 24);
+          }
+          if (nextL) {
+            ctx.fillStyle = rgba(curS, 0.28);
+            ctx.fillText(`NEXT >> ${nextL.text}`, cxScreen, by + 28);
+          }
+
+          if (heroWord) {
+            const heroPx = Math.min(84, Math.max(40, w * 0.068));
+            const activeGlitch = Math.max(glitchSpike, pulse.beat * 0.65);
+            const splitX = 2.5 + activeGlitch * 10;
+
+            ctx.save();
+            ctx.globalCompositeOperation = 'lighter';
+            const gr = 120 + pulse.bass * 45;
+            ctx.globalAlpha = 0.45;
+            ctx.drawImage(sprites.primary, cxScreen - gr, cyScreen - gr, gr * 2, gr * 2);
+            ctx.restore();
+
+            ctx.font = `800 ${heroPx.toFixed(1)}px "Syne", sans-serif`;
+
+            // Chromatic RGB split silhouettes
+            ctx.fillStyle = rgba(curP, 0.62);
+            ctx.fillText(heroWord, cxScreen - splitX, cyScreen + 1.5);
+            ctx.fillStyle = rgba(curS, 0.62);
+            ctx.fillText(heroWord, cxScreen + splitX, cyScreen - 1.5);
+
+            // Core crisp text + cyber slice tear during high beat/transition
+            ctx.fillStyle = rgba(curA, 0.98);
+            ctx.fillText(heroWord, cxScreen, cyScreen);
+
+            if (activeGlitch > 0.28) {
+              const sliceH = heroPx * 0.28;
+              const sliceY = cyScreen - sliceH * 0.5 + (seeded(Math.floor(t * 24)) - 0.5) * heroPx * 0.5;
+              const tearShift = (seeded(Math.floor(t * 31) + 7) - 0.5) * 28 * activeGlitch;
+              ctx.save();
+              ctx.beginPath();
+              ctx.rect(0, sliceY, w, sliceH);
+              ctx.clip();
+              ctx.fillStyle = rgba(curS, 0.9);
+              ctx.fillText(heroWord, cxScreen + tearShift, cyScreen);
+              ctx.restore();
+            }
+          }
+
+          // Active line timeline under reticle
+          if (line && line.words.length > 0) {
+            ctx.font = '600 16px "Space Grotesk", sans-serif';
+            const gap = 12;
+            const totalW =
+              line.words.reduce((acc, wd) => acc + ctx.measureText(wd.text).width, 0) +
+              gap * Math.max(0, line.words.length - 1);
+            let wx = cxScreen - totalW * 0.5;
+            const wy = by - 28;
+            line.words.forEach((wd, idx) => {
+              const wWidth = ctx.measureText(wd.text).width;
+              const isAct = idx === st.activeWordIdx;
+              const isPastW = idx < st.activeWordIdx;
+              ctx.fillStyle = isAct ? rgba(curP, 1) : isPastW ? rgba(curA, 0.85) : 'rgba(255,255,255,0.28)';
+              ctx.fillText(wd.text, wx + wWidth * 0.5, wy);
+              wx += wWidth + gap;
+            });
+          }
+          ctx.restore();
         }
       }
 
-      // LAYER 3: Radiant Ignition Sparks
+      // LAYER 3: Expanding Shockwaves & Ignition Sparks
+      if (shockwaves.length > 0) {
+        ctx.save();
+        ctx.globalCompositeOperation = 'lighter';
+        for (let i = shockwaves.length - 1; i >= 0; i--) {
+          const sw = shockwaves[i];
+          sw.life += dt;
+          if (sw.life >= sw.maxLife) {
+            shockwaves.splice(i, 1);
+            continue;
+          }
+          const p = sw.life / sw.maxLife;
+          const r = 12 + easeOutCubic(p) * sw.maxR;
+          const alpha = Math.pow(1 - p, 1.8) * 0.45;
+          ctx.strokeStyle = rgba(sw.warm ? curP : curS, alpha);
+          ctx.lineWidth = Math.max(0.6, sw.lineWidth * (1 - p));
+          ctx.beginPath();
+          ctx.arc(sw.x, sw.y, r, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+        ctx.restore();
+      }
+
       if (sparks.length > 0 && sprites) {
         ctx.save();
         ctx.globalCompositeOperation = 'lighter';
