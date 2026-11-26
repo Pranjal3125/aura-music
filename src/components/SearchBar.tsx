@@ -162,7 +162,7 @@ export const SearchBar: React.FC<SearchBarProps> = ({
       </div>
 
       {open && (results.length > 0 || (!loading && query.trim().length >= 2)) && (
-        <div className="absolute left-0 right-0 mt-2.5 oled-surface rounded-2xl overflow-hidden max-h-[60vh] overflow-y-auto z-50">
+        <div className="absolute left-0 right-0 mt-2.5 oled-surface rounded-2xl overflow-hidden max-h-[60vh] overflow-y-auto z-50 animate-panel-in">
           {results.length === 0 ? (
             <div className="p-5 text-center text-xs text-white/50">
               No songs matched &ldquo;{query}&rdquo;. Try another song or artist name.

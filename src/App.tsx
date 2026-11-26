@@ -137,7 +137,9 @@ const AuraStage: React.FC = () => {
   const [duration, setDuration] = useState(0);
   const [volume, setVolume] = useState(0.85);
   const [muted, setMuted] = useState(false);
-  const [eqPreset, setEqPreset] = useState<EqPresetId>('flat');
+  const [eqPreset, setEqPreset] = useState<EqPresetId | 'custom'>('flat');
+  const [eqBands, setEqBands] = useState({ bass: 0, mid: 0, treble: 0 });
+  const [studioTab, setStudioTab] = useState<'presets' | 'visuals' | 'audio'>('presets');
 
   const [lyrics, setLyrics] = useState<LyricLine[]>([]);
   const [lyricsLoading, setLyricsLoading] = useState(false);
@@ -756,8 +758,9 @@ const AuraStage: React.FC = () => {
         if (f) handleLocalFile(f);
       }}
     >
-      {/* Pure OLED Center Ambient Wash */}
+      {/* Pure OLED Center Ambient Wash + Anti-Banding Film Micro-Grain */}
       <div className="aura-oled-backdrop" />
+      <div className="aura-film-grain" />
 
       {/* 25-Min Focus Mode Ultra-Minimal Top Bezel Progress Line */}
       {focusRemaining !== null && (
@@ -812,19 +815,30 @@ const AuraStage: React.FC = () => {
       )}
 
       {/* ====================================================================
-          HOME SCREEN — SPOTLIGHT SONG SEARCH + LIVE TAB/MIC + PLAY INSTANTLY
+          HOME SCREEN — LUXURY EDITORIAL SHOWCASE + LIVE VIBE SWATCHES
           ==================================================================== */}
       {!activeSong && (
-        <div className="relative z-20 w-full h-full flex flex-col items-center justify-center px-5 py-10 overflow-y-auto">
+        <div className="relative z-20 w-full h-full flex flex-col items-center justify-center px-5 py-8 overflow-y-auto">
           <div className="flex flex-col items-center text-center mb-6">
-            <div className="flex items-center gap-2.5 mb-2">
+            <div className="oled-pill px-3 py-1 rounded-full text-[10px] font-mono-code tracking-[0.2em] uppercase text-white/60 mb-3 flex items-center gap-2">
               <span
-                className="w-2.5 h-2.5 rounded-full"
-                style={{ backgroundColor: primary, boxShadow: `0 0 16px ${primary}` }}
+                className="w-1.5 h-1.5 rounded-full"
+                style={{ backgroundColor: primary, boxShadow: `0 0 8px ${primary}` }}
               />
-              <span className="font-display text-2xl sm:text-3xl font-bold tracking-[0.28em]">AURA</span>
+              OLED Stage · Synced Lyrics · Lumn Glow
             </div>
-            <p className="text-xs sm:text-sm text-white/50 max-w-md">
+
+            <div className="relative flex items-center justify-center">
+              <div
+                aria-hidden
+                className="absolute w-44 h-16 rounded-full blur-3xl opacity-35 pointer-events-none"
+                style={{ background: `linear-gradient(90deg, ${primary}, ${blueprint.palette.secondary})` }}
+              />
+              <h1 className="relative font-display text-4xl sm:text-5xl font-extrabold tracking-[0.26em] bg-gradient-to-b from-white via-white to-white/60 bg-clip-text text-transparent">
+                AURA
+              </h1>
+            </div>
+            <p className="text-xs sm:text-sm text-white/50 max-w-md mt-2 leading-relaxed">
               Search any song — gliding constellation lyrics, neural branches &amp; music-synced OLED edge lighting.
             </p>
           </div>
@@ -840,47 +854,72 @@ const AuraStage: React.FC = () => {
             onDropdownToggle={setSearchOpen}
           />
 
-          {/* Quick Source Pills: YT / Spotify Tab Capture, Room Mic, Tagde Presets */}
-          <div className="flex flex-wrap items-center justify-center gap-2 mt-4">
-            <button
-              type="button"
-              onClick={() => void handleStartLiveAudio('tab')}
-              className="oled-pill px-3.5 py-1.5 rounded-full text-xs text-white/75 hover:text-white flex items-center gap-1.5 cursor-pointer"
-            >
-              <MonitorPlay className="w-3.5 h-3.5 text-emerald-400" />
-              <span>Sync YT / Spotify Tab</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => void handleStartLiveAudio('mic')}
-              className="oled-pill px-3.5 py-1.5 rounded-full text-xs text-white/75 hover:text-white flex items-center gap-1.5 cursor-pointer"
-            >
-              <Mic className="w-3.5 h-3.5 text-sky-400" />
-              <span>Room Mic Mode</span>
-            </button>
-            <button
-              type="button"
-              onClick={openCompanion}
-              className="oled-pill px-3.5 py-1.5 rounded-full text-xs text-white/75 hover:text-white flex items-center gap-1.5 cursor-pointer"
-            >
-              <MonitorSmartphone className="w-3.5 h-3.5" style={{ color: primary }} />
-              <span>Dual-Screen Companion</span>
-            </button>
+          {/* Live Room Vibe Swatch Strip (Preview OLED Edge Glow on Home Screen!) */}
+          <div className="flex items-center justify-center gap-2 mt-4 flex-wrap">
+            {VIBE_PRESETS.slice(0, 6).map((p) => {
+              const active = activePresetId === p.id;
+              return (
+                <button
+                  key={p.id}
+                  type="button"
+                  onClick={() => applyPreset(p.id)}
+                  title={`${p.name} — ${p.description}`}
+                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] transition-all cursor-pointer border ${
+                    active
+                      ? 'bg-white/[0.12] border-white/30 text-white font-medium'
+                      : 'bg-white/[0.03] hover:bg-white/[0.08] border-white/[0.06] text-white/55 hover:text-white'
+                  }`}
+                >
+                  <span
+                    className="w-2.5 h-2.5 rounded-full"
+                    style={{
+                      background: `linear-gradient(135deg, ${p.palette.primary}, ${p.palette.secondary})`,
+                      boxShadow: active ? `0 0 8px ${p.palette.primary}` : 'none',
+                    }}
+                  />
+                  <span>{p.name}</span>
+                </button>
+              );
+            })}
           </div>
 
           {/* Curated Play Instantly Grid */}
-          <div className="w-[min(92vw,780px)] mt-8">
+          <div className="w-[min(92vw,820px)] mt-7">
             <div className="flex items-center justify-between mb-3 px-1">
-              <span className="text-[11px] font-mono-code uppercase tracking-widest text-white/40">
-                Play Instantly
+              <span className="text-[11px] font-mono-code uppercase tracking-widest text-white/45">
+                Play Instantly · Full 320K + Synced
               </span>
-              <span className="text-[11px] text-white/35">Or drag &amp; drop any MP3</span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => void handleStartLiveAudio('tab')}
+                  className="text-[11px] text-white/50 hover:text-emerald-400 flex items-center gap-1 cursor-pointer transition-colors"
+                >
+                  <MonitorPlay className="w-3 h-3" /> YT/Spotify Tab
+                </button>
+                <span className="text-white/20">·</span>
+                <button
+                  type="button"
+                  onClick={() => void handleStartLiveAudio('mic')}
+                  className="text-[11px] text-white/50 hover:text-sky-400 flex items-center gap-1 cursor-pointer transition-colors"
+                >
+                  <Mic className="w-3 h-3" /> Mic
+                </button>
+                <span className="text-white/20">·</span>
+                <button
+                  type="button"
+                  onClick={openCompanion}
+                  className="text-[11px] text-white/50 hover:text-white flex items-center gap-1 cursor-pointer transition-colors"
+                >
+                  <MonitorSmartphone className="w-3 h-3" /> Companion
+                </button>
+              </div>
             </div>
 
             {featuredLoading ? (
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                 {Array.from({ length: 8 }).map((_, i) => (
-                  <div key={i} className="h-16 rounded-2xl bg-white/[0.04] animate-pulse" />
+                  <div key={i} className="h-[70px] rounded-2xl bg-white/[0.04] animate-pulse" />
                 ))}
               </div>
             ) : (
@@ -890,9 +929,12 @@ const AuraStage: React.FC = () => {
                     key={song.id}
                     type="button"
                     onClick={() => void playSong(song, featured)}
-                    className="group flex items-center gap-3 p-2.5 rounded-2xl bg-white/[0.035] hover:bg-white/[0.09] border border-white/[0.07] transition-all duration-300 ease-apple text-left cursor-pointer"
+                    className="group oled-surface flex items-center gap-3 p-2.5 rounded-2xl hover:border-white/20 hover:-translate-y-0.5 transition-all duration-300 ease-apple text-left cursor-pointer"
                   >
-                    <div className="relative w-11 h-11 rounded-xl overflow-hidden bg-zinc-900 shrink-0">
+                    <div
+                      className="relative w-12 h-12 rounded-xl overflow-hidden bg-zinc-900 shrink-0 border border-white/10 transition-transform duration-300 group-hover:scale-105"
+                      style={{ boxShadow: `0 6px 18px rgba(0,0,0,0.6)` }}
+                    >
                       {song.artworkUrl ? (
                         <img
                           src={song.artworkUrl}
@@ -909,7 +951,7 @@ const AuraStage: React.FC = () => {
                     </div>
                     <div className="min-w-0 flex-1">
                       <div className="text-xs font-semibold text-white truncate">{song.title}</div>
-                      <div className="text-[11px] text-white/45 truncate">{song.artist}</div>
+                      <div className="text-[11px] text-white/45 truncate mt-0.5">{song.artist}</div>
                     </div>
                   </button>
                 ))}
@@ -940,7 +982,7 @@ const AuraStage: React.FC = () => {
                 setVibePanelOpen(false);
                 setLyricsDrawerOpen(false);
               }}
-              className="flex items-center gap-2 px-3 py-1.5 rounded-full hover:bg-white/[0.06] transition-colors cursor-pointer shrink-0"
+              className="oled-pill flex items-center gap-2 px-3.5 py-2 rounded-full hover:border-white/25 transition-all cursor-pointer shrink-0 group"
               title="Back to Home"
             >
               <span
@@ -965,250 +1007,348 @@ const AuraStage: React.FC = () => {
             <button
               type="button"
               onClick={() => setVibePanelOpen((v) => !v)}
-              className="oled-pill px-3.5 py-2 rounded-full flex items-center gap-2 text-xs hover:bg-white/[0.08] transition-colors cursor-pointer shrink-0"
+              className="oled-pill px-3.5 py-2 rounded-full flex items-center gap-2 text-xs hover:border-white/25 transition-all cursor-pointer shrink-0"
               style={vibePanelOpen ? { borderColor: primary } : undefined}
             >
               {isDirecting ? (
                 <Loader2 className="w-3.5 h-3.5 animate-spin" style={{ color: primary }} />
               ) : (
-                <Sliders className="w-3.5 h-3.5" style={{ color: primary }} />
+                <span
+                  className="w-3 h-3 rounded-full shrink-0 border border-white/25"
+                  style={{
+                    background: `linear-gradient(135deg, ${primary}, ${blueprint.palette.secondary})`,
+                    boxShadow: `0 0 10px ${primary}88`,
+                  }}
+                />
               )}
               <span className="hidden md:inline font-grotesk font-medium text-white/90 max-w-[140px] truncate">
                 {blueprint.moodName}
               </span>
+              <Sliders className="w-3 h-3 text-white/45" />
             </button>
           </div>
 
-          {/* Right Pro Studio Drawer: 10 Tagde Presets + AI Steer + EQ + Visuals + Focus + Gemini */}
+          {/* Tabbed Zero-Scroll Pro Studio Popover */}
           {vibePanelOpen && !pureCinema && (
-            <div className="fixed top-20 bottom-36 right-5 z-50 w-[min(92vw,390px)] oled-surface rounded-3xl p-4 overflow-y-auto space-y-5">
-              {/* Header */}
-              <div className="flex items-center justify-between">
-                <div>
-                  <div className="text-[10px] font-mono-code uppercase tracking-widest text-white/45">
-                    {blueprint.source === 'gemini_4' ? 'GEMINI 4 DIRECTED' : 'AURA STUDIO & PRESETS'}
-                  </div>
-                  <div className="text-sm font-grotesk font-semibold text-white">{blueprint.moodName}</div>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setVibePanelOpen(false)}
-                  className="p-1.5 rounded-lg bg-white/[0.06] hover:bg-white/[0.12] text-white/60 cursor-pointer"
-                >
-                  <X className="w-3.5 h-3.5" />
-                </button>
-              </div>
-
-              {/* 10 Signature Tagde Presets */}
-              <div className="space-y-2">
+            <div className="fixed top-20 bottom-36 right-5 z-50 w-[min(92vw,396px)] oled-surface rounded-3xl flex flex-col overflow-hidden animate-panel-in">
+              {/* Studio Header + Segmented Tabs */}
+              <div className="p-4 pb-3 border-b border-white/[0.07] space-y-3 shrink-0">
                 <div className="flex items-center justify-between">
-                  <span className="text-[10px] font-mono-code uppercase tracking-widest text-white/45">
-                    Signature Presets (10)
-                  </span>
-                  <span className="text-[10px] text-white/35">1-Click Room Transform</span>
-                </div>
-                <div className="grid grid-cols-2 gap-1.5">
-                  {VIBE_PRESETS.map((p) => {
-                    const active = activePresetId === p.id;
-                    return (
-                      <button
-                        key={p.id}
-                        type="button"
-                        onClick={() => applyPreset(p.id)}
-                        className={`p-2 rounded-2xl text-left border transition-all cursor-pointer flex items-center gap-2.5 ${
-                          active
-                            ? 'bg-white/[0.12] border-white/35'
-                            : 'bg-white/[0.035] hover:bg-white/[0.08] border-white/[0.06]'
-                        }`}
-                      >
-                        <span
-                          className="w-5 h-5 rounded-full shrink-0 border border-white/25"
-                          style={{
-                            background: `linear-gradient(135deg, ${p.palette.primary}, ${p.palette.secondary})`,
-                            boxShadow: active ? `0 0 12px ${p.palette.primary}` : 'none',
-                          }}
-                        />
-                        <div className="min-w-0">
-                          <div className="text-[11px] font-semibold text-white truncate">{p.name}</div>
-                          <div className="text-[9px] font-mono-code text-white/40 truncate">{p.tag}</div>
-                        </div>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* AI Prompt Steer */}
-              <form onSubmit={handlePromptSteer} className="space-y-1.5">
-                <div className="text-[10px] font-mono-code uppercase tracking-widest text-white/45">
-                  Steer AI Vibe
-                </div>
-                <div className="flex items-center gap-1.5">
-                  <div className="flex-1 min-w-0 flex items-center gap-2 rounded-xl bg-white/[0.06] border border-white/[0.1] px-2.5 py-1.5">
-                    <Wand2 className="w-3.5 h-3.5 text-white/45 shrink-0" />
-                    <input
-                      type="text"
-                      value={promptInput}
-                      onChange={(e) => setPromptInput(e.target.value)}
-                      placeholder='e.g. "cyber samurai" or "monsoon blue"'
-                      className="flex-1 min-w-0 bg-transparent text-xs text-white placeholder:text-white/35 outline-none"
-                    />
-                  </div>
-                  <button
-                    type="submit"
-                    disabled={!promptInput.trim() || isDirecting}
-                    className="px-3 py-1.5 rounded-xl text-xs font-semibold text-black disabled:opacity-40 cursor-pointer shrink-0"
-                    style={{ backgroundColor: primary }}
-                  >
-                    Morph
-                  </button>
-                </div>
-              </form>
-
-              {/* Visual Controls: Edge, Particles, Spectrum */}
-              <div className="space-y-3 pt-2 border-t border-white/[0.08]">
-                <div className="space-y-1.5">
-                  <div className="text-[10px] font-mono-code uppercase tracking-widest text-white/40">
-                    Edge Lighting
-                  </div>
-                  <div className="grid grid-cols-4 gap-1.5">
-                    {EDGE_STYLES.map((opt) => (
-                      <button
-                        key={opt.id}
-                        type="button"
-                        onClick={() => setBlueprint((b) => ({ ...b, edgeStyle: opt.id }))}
-                        className={`py-1.5 rounded-xl text-[11px] transition-colors cursor-pointer ${
-                          blueprint.edgeStyle === opt.id
-                            ? 'text-black font-semibold'
-                            : 'bg-white/[0.05] hover:bg-white/[0.1] text-white/75'
-                        }`}
-                        style={blueprint.edgeStyle === opt.id ? { backgroundColor: primary } : undefined}
-                      >
-                        {opt.label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="space-y-1.5">
-                  <div className="flex items-center justify-between">
-                    <span className="text-[10px] font-mono-code uppercase tracking-widest text-white/40">
-                      Atmosphere &amp; Spectrum
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => setBlueprint((b) => ({ ...b, showSpectrum: !b.showSpectrum }))}
-                      className={`px-2 py-0.5 rounded-full text-[10px] font-mono-code cursor-pointer transition-colors ${
-                        blueprint.showSpectrum ? 'text-black font-semibold' : 'bg-white/[0.07] text-white/60'
-                      }`}
-                      style={blueprint.showSpectrum ? { backgroundColor: primary } : undefined}
-                    >
-                      Spectrum {blueprint.showSpectrum ? 'ON' : 'OFF'}
-                    </button>
-                  </div>
-                  <div className="grid grid-cols-4 gap-1.5">
-                    {PARTICLE_STYLES.map((opt) => (
-                      <button
-                        key={opt.id}
-                        type="button"
-                        onClick={() => setBlueprint((b) => ({ ...b, particles: opt.id }))}
-                        className={`py-1.5 rounded-xl text-[11px] transition-colors cursor-pointer ${
-                          blueprint.particles === opt.id
-                            ? 'text-black font-semibold'
-                            : 'bg-white/[0.05] hover:bg-white/[0.1] text-white/75'
-                        }`}
-                        style={blueprint.particles === opt.id ? { backgroundColor: primary } : undefined}
-                      >
-                        {opt.label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              </div>
-
-              {/* Studio 3-Band Web Audio EQ */}
-              <div className="space-y-1.5 pt-2 border-t border-white/[0.08]">
-                <div className="text-[10px] font-mono-code uppercase tracking-widest text-white/45">
-                  Studio Audio EQ
-                </div>
-                <div className="flex flex-wrap gap-1.5">
-                  {(Object.keys(EQ_PRESETS) as EqPresetId[]).map((id) => {
-                    const active = eqPreset === id;
-                    return (
-                      <button
-                        key={id}
-                        type="button"
-                        onClick={() => {
-                          setEqPreset(id);
-                          const eq = EQ_PRESETS[id];
-                          audioRef.current?.setEq(eq.bass, eq.mid, eq.treble);
-                          showToast(`Audio EQ: ${eq.label}`);
-                        }}
-                        className={`px-2.5 py-1 rounded-xl text-[11px] transition-colors cursor-pointer ${
-                          active ? 'text-black font-semibold' : 'bg-white/[0.05] hover:bg-white/[0.1] text-white/75'
-                        }`}
-                        style={active ? { backgroundColor: primary } : undefined}
-                      >
-                        {EQ_PRESETS[id].label}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* Focus Mode 25m Timer + Live Audio Inputs */}
-              <div className="grid grid-cols-2 gap-1.5 pt-2 border-t border-white/[0.08]">
-                <button
-                  type="button"
-                  onClick={() => setFocusRemaining((r) => (r === null ? 25 * 60 : null))}
-                  className="py-2 px-2.5 rounded-xl bg-white/[0.05] hover:bg-white/[0.1] text-xs flex items-center justify-center gap-1.5 cursor-pointer"
-                >
-                  <Timer className="w-3.5 h-3.5" style={{ color: primary }} />
-                  <span>{focusRemaining !== null ? `Focus ${fmtTime(focusRemaining)}` : '25m Focus'}</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void handleStartLiveAudio('tab')}
-                  className="py-2 px-2.5 rounded-xl bg-white/[0.05] hover:bg-white/[0.1] text-xs flex items-center justify-center gap-1.5 cursor-pointer"
-                >
-                  <MonitorPlay className="w-3.5 h-3.5 text-emerald-400" />
-                  <span>YT / Spotify Tab</span>
-                </button>
-              </div>
-
-              {/* Optional Gemini 4 API Key */}
-              <div className="pt-2.5 border-t border-white/[0.08] space-y-2">
-                <div className="text-[10px] font-mono-code uppercase tracking-widest text-white/45 flex items-center justify-between">
-                  <span>Gemini 4 Vision AI (Optional)</span>
-                  <span className="text-white/30">gemini-4-hydrogen</span>
-                </div>
-                <div className="flex items-center gap-1.5">
-                  <div className="flex-1 min-w-0 flex items-center gap-2 rounded-xl bg-black/50 border border-white/[0.1] px-2.5 py-1.5">
-                    <KeyRound className="w-3.5 h-3.5 text-white/40 shrink-0" />
-                    <input
-                      type="password"
-                      value={keyDraft}
-                      onChange={(e) => setKeyDraft(e.target.value)}
-                      placeholder="AIzaSy... (optional key)"
-                      className="flex-1 min-w-0 bg-transparent text-xs text-white placeholder:text-white/30 outline-none font-mono-code"
-                    />
+                  <div>
+                    <div className="text-[10px] font-mono-code uppercase tracking-widest text-white/45">
+                      {blueprint.source === 'gemini_4' ? 'GEMINI 4 DIRECTED' : 'AURA STUDIO'}
+                    </div>
+                    <div className="text-sm font-grotesk font-semibold text-white">{blueprint.moodName}</div>
                   </div>
                   <button
                     type="button"
-                    onClick={() => {
-                      const clean = keyDraft.trim();
-                      setGeminiKey(clean);
-                      if (clean) localStorage.setItem('aura_gemini_key', clean);
-                      else localStorage.removeItem('aura_gemini_key');
-                      setKeySaved(true);
-                      setTimeout(() => setKeySaved(false), 1500);
-                    }}
-                    className="px-3 py-1.5 rounded-xl text-xs font-semibold text-black cursor-pointer shrink-0"
-                    style={{ backgroundColor: primary }}
+                    onClick={() => setVibePanelOpen(false)}
+                    className="p-1.5 rounded-lg bg-white/[0.06] hover:bg-white/[0.12] text-white/60 cursor-pointer"
                   >
-                    {keySaved ? <Check className="w-3.5 h-3.5" /> : 'Save'}
+                    <X className="w-3.5 h-3.5" />
                   </button>
                 </div>
+
+                <div className="grid grid-cols-3 gap-1 p-1 rounded-xl bg-white/[0.04] border border-white/[0.06]">
+                  {(
+                    [
+                      { id: 'presets', label: 'Presets & AI' },
+                      { id: 'visuals', label: 'Visuals' },
+                      { id: 'audio', label: 'Audio & EQ' },
+                    ] as const
+                  ).map((t) => {
+                    const act = studioTab === t.id;
+                    return (
+                      <button
+                        key={t.id}
+                        type="button"
+                        onClick={() => setStudioTab(t.id)}
+                        className={`py-1.5 rounded-lg text-[11px] font-medium transition-all cursor-pointer ${
+                          act ? 'text-black font-semibold shadow' : 'text-white/60 hover:text-white'
+                        }`}
+                        style={act ? { backgroundColor: primary } : undefined}
+                      >
+                        {t.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Tab Content */}
+              <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                {studioTab === 'presets' && (
+                  <>
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] font-mono-code uppercase tracking-widest text-white/45">
+                          10 Signature Presets
+                        </span>
+                        <span className="text-[10px] text-white/35">1-Click Mood</span>
+                      </div>
+                      <div className="grid grid-cols-2 gap-1.5">
+                        {VIBE_PRESETS.map((p) => {
+                          const active = activePresetId === p.id;
+                          return (
+                            <button
+                              key={p.id}
+                              type="button"
+                              onClick={() => applyPreset(p.id)}
+                              className={`p-2 rounded-2xl text-left border transition-all cursor-pointer flex items-center gap-2.5 ${
+                                active
+                                  ? 'bg-white/[0.12] border-white/35'
+                                  : 'bg-white/[0.03] hover:bg-white/[0.08] border-white/[0.06]'
+                              }`}
+                            >
+                              <span
+                                className="w-5 h-5 rounded-full shrink-0 border border-white/25"
+                                style={{
+                                  background: `linear-gradient(135deg, ${p.palette.primary}, ${p.palette.secondary})`,
+                                  boxShadow: active ? `0 0 12px ${p.palette.primary}` : 'none',
+                                }}
+                              />
+                              <div className="min-w-0">
+                                <div className="text-[11px] font-semibold text-white truncate">{p.name}</div>
+                                <div className="text-[9px] font-mono-code text-white/40 truncate">{p.tag}</div>
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    <form onSubmit={handlePromptSteer} className="space-y-1.5 pt-2 border-t border-white/[0.07]">
+                      <div className="text-[10px] font-mono-code uppercase tracking-widest text-white/45">
+                        Steer AI Vibe Prompt
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <div className="flex-1 min-w-0 flex items-center gap-2 rounded-xl bg-white/[0.06] border border-white/[0.1] px-2.5 py-1.5">
+                          <Wand2 className="w-3.5 h-3.5 text-white/45 shrink-0" />
+                          <input
+                            type="text"
+                            value={promptInput}
+                            onChange={(e) => setPromptInput(e.target.value)}
+                            placeholder='e.g. "cyber samurai" or "monsoon blue"'
+                            className="flex-1 min-w-0 bg-transparent text-xs text-white placeholder:text-white/35 outline-none"
+                          />
+                        </div>
+                        <button
+                          type="submit"
+                          disabled={!promptInput.trim() || isDirecting}
+                          className="px-3 py-1.5 rounded-xl text-xs font-semibold text-black disabled:opacity-40 cursor-pointer shrink-0"
+                          style={{ backgroundColor: primary }}
+                        >
+                          Morph
+                        </button>
+                      </div>
+                    </form>
+                  </>
+                )}
+
+                {studioTab === 'visuals' && (
+                  <div className="space-y-4">
+                    <div className="space-y-1.5">
+                      <div className="text-[10px] font-mono-code uppercase tracking-widest text-white/45">
+                        Visual World
+                      </div>
+                      <div className="grid grid-cols-3 gap-1.5">
+                        {LYRIC_STYLES.map((opt) => (
+                          <button
+                            key={opt.id}
+                            type="button"
+                            onClick={() => setBlueprint((b) => ({ ...b, lyricStyle: opt.id }))}
+                            className={`py-1.5 px-2 rounded-xl text-xs transition-colors cursor-pointer ${
+                              blueprint.lyricStyle === opt.id
+                                ? 'text-black font-semibold'
+                                : 'bg-white/[0.05] hover:bg-white/[0.1] text-white/75'
+                            }`}
+                            style={blueprint.lyricStyle === opt.id ? { backgroundColor: primary } : undefined}
+                          >
+                            {opt.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="space-y-1.5 pt-2 border-t border-white/[0.07]">
+                      <div className="text-[10px] font-mono-code uppercase tracking-widest text-white/45">
+                        Edge Lighting
+                      </div>
+                      <div className="grid grid-cols-4 gap-1.5">
+                        {EDGE_STYLES.map((opt) => (
+                          <button
+                            key={opt.id}
+                            type="button"
+                            onClick={() => setBlueprint((b) => ({ ...b, edgeStyle: opt.id }))}
+                            className={`py-1.5 rounded-xl text-[11px] transition-colors cursor-pointer ${
+                              blueprint.edgeStyle === opt.id
+                                ? 'text-black font-semibold'
+                                : 'bg-white/[0.05] hover:bg-white/[0.1] text-white/75'
+                            }`}
+                            style={blueprint.edgeStyle === opt.id ? { backgroundColor: primary } : undefined}
+                          >
+                            {opt.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="space-y-1.5 pt-2 border-t border-white/[0.07]">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] font-mono-code uppercase tracking-widest text-white/45">
+                          Atmosphere &amp; Spectrum
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setBlueprint((b) => ({ ...b, showSpectrum: !b.showSpectrum }))}
+                          className={`px-2.5 py-0.5 rounded-full text-[10px] font-mono-code cursor-pointer transition-colors ${
+                            blueprint.showSpectrum ? 'text-black font-semibold' : 'bg-white/[0.07] text-white/60'
+                          }`}
+                          style={blueprint.showSpectrum ? { backgroundColor: primary } : undefined}
+                        >
+                          Spectrum {blueprint.showSpectrum ? 'ON' : 'OFF'}
+                        </button>
+                      </div>
+                      <div className="grid grid-cols-4 gap-1.5">
+                        {PARTICLE_STYLES.map((opt) => (
+                          <button
+                            key={opt.id}
+                            type="button"
+                            onClick={() => setBlueprint((b) => ({ ...b, particles: opt.id }))}
+                            className={`py-1.5 rounded-xl text-[11px] transition-colors cursor-pointer ${
+                              blueprint.particles === opt.id
+                                ? 'text-black font-semibold'
+                                : 'bg-white/[0.05] hover:bg-white/[0.1] text-white/75'
+                            }`}
+                            style={blueprint.particles === opt.id ? { backgroundColor: primary } : undefined}
+                          >
+                            {opt.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {studioTab === 'audio' && (
+                  <div className="space-y-4">
+                    <div className="space-y-2">
+                      <div className="text-[10px] font-mono-code uppercase tracking-widest text-white/45">
+                        Studio Audio EQ Presets
+                      </div>
+                      <div className="flex flex-wrap gap-1.5">
+                        {(Object.keys(EQ_PRESETS) as EqPresetId[]).map((id) => {
+                          const active = eqPreset === id;
+                          return (
+                            <button
+                              key={id}
+                              type="button"
+                              onClick={() => {
+                                setEqPreset(id);
+                                const eq = EQ_PRESETS[id];
+                                setEqBands({ bass: eq.bass, mid: eq.mid, treble: eq.treble });
+                                audioRef.current?.setEq(eq.bass, eq.mid, eq.treble);
+                                showToast(`Audio EQ: ${eq.label}`);
+                              }}
+                              className={`px-2.5 py-1 rounded-xl text-[11px] transition-colors cursor-pointer ${
+                                active ? 'text-black font-semibold' : 'bg-white/[0.05] hover:bg-white/[0.1] text-white/75'
+                              }`}
+                              style={active ? { backgroundColor: primary } : undefined}
+                            >
+                              {EQ_PRESETS[id].label}
+                            </button>
+                          );
+                        })}
+                      </div>
+
+                      {/* Real-time 3-Band EQ Sliders */}
+                      <div className="space-y-2 pt-2">
+                        {(
+                          [
+                            { key: 'bass', label: 'Sub Bass (95Hz)' },
+                            { key: 'mid', label: 'Vocal Presence (1.8k)' },
+                            { key: 'treble', label: 'Treble Air (8kHz)' },
+                          ] as const
+                        ).map((band) => (
+                          <div key={band.key} className="flex items-center gap-3 text-[11px]">
+                            <span className="w-32 text-white/60">{band.label}</span>
+                            <input
+                              type="range"
+                              min={-8}
+                              max={10}
+                              step={0.5}
+                              value={eqBands[band.key]}
+                              onChange={(e) => {
+                                const val = parseFloat(e.target.value);
+                                const next = { ...eqBands, [band.key]: val };
+                                setEqBands(next);
+                                setEqPreset('custom');
+                                audioRef.current?.setEq(next.bass, next.mid, next.treble);
+                              }}
+                              className="aura-slider flex-1"
+                            />
+                            <span className="w-10 text-right font-mono-code text-white/70">
+                              {eqBands[band.key] > 0 ? `+${eqBands[band.key]}` : eqBands[band.key]}dB
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-1.5 pt-2 border-t border-white/[0.07]">
+                      <button
+                        type="button"
+                        onClick={() => setFocusRemaining((r) => (r === null ? 25 * 60 : null))}
+                        className="py-2 px-2.5 rounded-xl bg-white/[0.05] hover:bg-white/[0.1] text-xs flex items-center justify-center gap-1.5 cursor-pointer"
+                      >
+                        <Timer className="w-3.5 h-3.5" style={{ color: primary }} />
+                        <span>{focusRemaining !== null ? `Focus ${fmtTime(focusRemaining)}` : '25m Focus'}</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void handleStartLiveAudio('tab')}
+                        className="py-2 px-2.5 rounded-xl bg-white/[0.05] hover:bg-white/[0.1] text-xs flex items-center justify-center gap-1.5 cursor-pointer"
+                      >
+                        <MonitorPlay className="w-3.5 h-3.5 text-emerald-400" />
+                        <span>YT / Spotify Tab</span>
+                      </button>
+                    </div>
+
+                    <div className="pt-2 border-t border-white/[0.07] space-y-2">
+                      <div className="text-[10px] font-mono-code uppercase tracking-widest text-white/45 flex items-center justify-between">
+                        <span>Gemini 4 Vision AI (Optional)</span>
+                        <span className="text-white/30">gemini-4-hydrogen</span>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <div className="flex-1 min-w-0 flex items-center gap-2 rounded-xl bg-black/50 border border-white/[0.1] px-2.5 py-1.5">
+                          <KeyRound className="w-3.5 h-3.5 text-white/40 shrink-0" />
+                          <input
+                            type="password"
+                            value={keyDraft}
+                            onChange={(e) => setKeyDraft(e.target.value)}
+                            placeholder="AIzaSy... (optional key)"
+                            className="flex-1 min-w-0 bg-transparent text-xs text-white placeholder:text-white/30 outline-none font-mono-code"
+                          />
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const clean = keyDraft.trim();
+                            setGeminiKey(clean);
+                            if (clean) localStorage.setItem('aura_gemini_key', clean);
+                            else localStorage.removeItem('aura_gemini_key');
+                            setKeySaved(true);
+                            setTimeout(() => setKeySaved(false), 1500);
+                          }}
+                          className="px-3 py-1.5 rounded-xl text-xs font-semibold text-black cursor-pointer shrink-0"
+                          style={{ backgroundColor: primary }}
+                        >
+                          {keySaved ? <Check className="w-3.5 h-3.5" /> : 'Save'}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           )}
@@ -1341,12 +1481,45 @@ const AuraStage: React.FC = () => {
                     />
                   </div>
                   <span className="w-8">{fmtTime(duration)}</span>
+                  {lyrics.length > 0 && (
+                    <div className="hidden sm:flex items-center gap-0.5 bg-white/[0.06] rounded-md px-1.5 py-0.5 text-[9px] text-white/65">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setLyricOffset((v) => {
+                            const next = Math.round((v - 0.5) * 10) / 10;
+                            saveOffset(activeSong.id, next);
+                            return next;
+                          })
+                        }
+                        className="hover:text-white cursor-pointer"
+                        title="Delay lyrics -0.5s ([)"
+                      >
+                        <Minus className="w-2.5 h-2.5" />
+                      </button>
+                      <span className="px-1">{lyricOffset >= 0 ? `+${lyricOffset}s` : `${lyricOffset}s`}</span>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setLyricOffset((v) => {
+                            const next = Math.round((v + 0.5) * 10) / 10;
+                            saveOffset(activeSong.id, next);
+                            return next;
+                          })
+                        }
+                        className="hover:text-white cursor-pointer"
+                        title="Advance lyrics +0.5s (])"
+                      >
+                        <Plus className="w-2.5 h-2.5" />
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
 
               <div className="flex items-center justify-between gap-2 sm:gap-3">
-                {/* Song Thumbnail + Inline Sync Adjuster (zero overlap!) */}
-                <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                {/* Song Thumbnail + Crisp Title/Artist */}
+                <div className="flex items-center gap-3 min-w-0 flex-1">
                   <div
                     className="w-10 h-10 rounded-lg overflow-hidden bg-zinc-900 shrink-0 border border-white/10"
                     style={{ boxShadow: `0 0 16px ${primary}44` }}
@@ -1362,42 +1535,9 @@ const AuraStage: React.FC = () => {
                   <div className="min-w-0">
                     <div className="flex items-center gap-1.5">
                       <span className="text-sm font-medium text-white truncate">{activeSong.title}</span>
-                      <span className="hidden sm:inline text-[9px] font-mono-code px-1.5 py-0.5 rounded bg-white/[0.07] text-white/55">
+                      <span className="hidden sm:inline text-[9px] font-mono-code px-1.5 py-0.5 rounded bg-white/[0.07] text-white/55 shrink-0">
                         {activeSong.isFullTrack ? 'FULL' : '30s'}
                       </span>
-                      {lyrics.length > 0 && (
-                        <div className="hidden md:flex items-center gap-0.5 ml-1 bg-white/[0.06] rounded-md px-1 py-0.5 text-[9px] font-mono-code text-white/70">
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setLyricOffset((v) => {
-                                const next = Math.round((v - 0.5) * 10) / 10;
-                                saveOffset(activeSong.id, next);
-                                return next;
-                              })
-                            }
-                            className="hover:text-white cursor-pointer"
-                            title="Delay lyrics -0.5s ([)"
-                          >
-                            <Minus className="w-2.5 h-2.5" />
-                          </button>
-                          <span className="px-1">{lyricOffset >= 0 ? `+${lyricOffset}s` : `${lyricOffset}s`}</span>
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setLyricOffset((v) => {
-                                const next = Math.round((v + 0.5) * 10) / 10;
-                                saveOffset(activeSong.id, next);
-                                return next;
-                              })
-                            }
-                            className="hover:text-white cursor-pointer"
-                            title="Advance lyrics +0.5s (])"
-                          >
-                            <Plus className="w-2.5 h-2.5" />
-                          </button>
-                        </div>
-                      )}
                     </div>
                     <div className="text-xs text-white/50 truncate">{activeSong.artist}</div>
                   </div>

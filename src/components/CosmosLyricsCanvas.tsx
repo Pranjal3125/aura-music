@@ -384,6 +384,14 @@ export const CosmosLyricsCanvas: React.FC<CosmosLyricsCanvasProps> = ({
         const cxScreen = w * 0.5;
         const cyScreen = h * 0.48;
 
+        // Subtle atmospheric nebula behind the active focal star (adds 3D depth with zero lag)
+        ctx.save();
+        ctx.globalCompositeOperation = 'lighter';
+        const nebR = Math.min(w, h) * 0.34 + pulse.bass * 48;
+        ctx.globalAlpha = 0.08 + pulse.bass * 0.05;
+        ctx.drawImage(sprites.primary, cxScreen - nebR, cyScreen - nebR, nebR * 2, nebR * 2);
+        ctx.restore();
+
         if (st.mode === 'constellation' || st.mode === 'branches') {
           const windowStart = Math.max(0, activeGlobal - 15);
           const windowEnd = Math.min(world.length - 1, activeGlobal + 9);
