@@ -50,6 +50,7 @@ import {
   makeSongKey,
   parseLocalFileName,
 } from './services/musicApi';
+import { loadUserSettings, saveUserSettings } from './services/settingsStorage';
 import { LightAudioEngine } from './engine/lightAudioEngine';
 import { directSongAutonomously, directSongWithGemini, presetToBlueprint } from './engine/vibeBrain';
 import { SearchBar } from './components/SearchBar';
@@ -133,23 +134,36 @@ export function App() {
   return <AuraStage />;
 }
 
+function buildInitialBlueprint(prefs: ReturnType<typeof loadUserSettings>): VibeBlueprint {
+  const preset = VIBE_PRESETS.find((p) => p.id === prefs.presetId) ?? VIBE_PRESETS[0];
+  const base = presetToBlueprint(preset);
+  return {
+    ...base,
+    lyricStyle: prefs.lyricStyle ?? base.lyricStyle,
+    edgeStyle: prefs.edgeStyle ?? base.edgeStyle,
+    particles: prefs.particles ?? base.particles,
+    showSpectrum: prefs.showSpectrum ?? base.showSpectrum,
+  };
+}
+
 const AuraStage: React.FC = () => {
+  const [initialPrefs] = useState(() => loadUserSettings());
   const [featured, setFeatured] = useState<SongItem[]>([]);
   const [featuredLoading, setFeaturedLoading] = useState(true);
 
   const [queue, setQueue] = useState<SongItem[]>([]);
   const [activeSong, setActiveSong] = useState<SongItem | null>(null);
-  const [infiniteRadio, setInfiniteRadio] = useState(true);
-  const [repeatOne, setRepeatOne] = useState(false);
+  const [infiniteRadio, setInfiniteRadio] = useState<boolean>(() => initialPrefs.infiniteRadio ?? true);
+  const [repeatOne, setRepeatOne] = useState<boolean>(() => initialPrefs.repeatOne ?? false);
   const [radioLoading, setRadioLoading] = useState(false);
   const playedKeysRef = useRef<Set<string>>(new Set());
   const radioFetchingRef = useRef(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [duration, setDuration] = useState(0);
-  const [volume, setVolume] = useState(0.85);
-  const [muted, setMuted] = useState(false);
-  const [eqPreset, setEqPreset] = useState<EqPresetId | 'custom'>('flat');
-  const [eqBands, setEqBands] = useState({ bass: 0, mid: 0, treble: 0 });
+  const [volume, setVolume] = useState<number>(() => initialPrefs.volume ?? 0.85);
+  const [muted, setMuted] = useState<boolean>(() => initialPrefs.muted ?? false);
+  const [eqPreset, setEqPreset] = useState<EqPresetId | 'custom'>(() => initialPrefs.eqPreset ?? 'flat');
+  const [eqBands, setEqBands] = useState(() => initialPrefs.eqBands ?? { bass: 0, mid: 0, treble: 0 });
   const [studioTab, setStudioTab] = useState<'presets' | 'visuals' | 'audio'>('presets');
 
   const [lyrics, setLyrics] = useState<LyricLine[]>([]);
@@ -158,8 +172,8 @@ const AuraStage: React.FC = () => {
   const [activeWordIdx, setActiveWordIdx] = useState(-1);
   const [lyricOffset, setLyricOffset] = useState(0);
 
-  const [blueprint, setBlueprint] = useState<VibeBlueprint>(DEFAULT_BLUEPRINT);
-  const [activePresetId, setActivePresetId] = useState<string>('starboy-noir');
+  const [blueprint, setBlueprint] = useState<VibeBlueprint>(() => buildInitialBlueprint(initialPrefs));
+  const [activePresetId, setActivePresetId] = useState<string>(() => initialPrefs.presetId ?? 'starboy-noir');
   const [geminiKey, setGeminiKey] = useState(() => localStorage.getItem('aura_gemini_key') || '');
   const [keyDraft, setKeyDraft] = useState(() => localStorage.getItem('aura_gemini_key') || '');
   const [keySaved, setKeySaved] = useState(false);
@@ -256,12 +270,42 @@ const AuraStage: React.FC = () => {
     return () => window.clearInterval(id);
   }, [focusRemaining !== null, showToast]);
 
+  const updateVolume = useCallback((nextVol: number) => {
+    const clamped = Math.round(Math.min(1, Math.max(0, nextVol)) * 100) / 100;
+    setVolume(clamped);
+    setMuted(clamped === 0);
+    audioRef.current?.setVolume(clamped);
+    saveUserSettings({ volume: clamped, muted: clamped === 0 });
+  }, []);
+
+  const toggleMute = useCallback(() => {
+    const next = !muted;
+    setMuted(next);
+    audioRef.current?.setVolume(next ? 0 : volume);
+    saveUserSettings({ muted: next });
+  }, [muted, volume]);
+
+  const updateVisualSetting = useCallback(
+    (patch: Partial<Pick<VibeBlueprint, 'lyricStyle' | 'edgeStyle' | 'particles' | 'showSpectrum'>>) => {
+      setBlueprint((b) => ({ ...b, ...patch }));
+      saveUserSettings(patch);
+    },
+    []
+  );
+
   const applyPreset = useCallback(
     (presetId: string) => {
       const preset = VIBE_PRESETS.find((p) => p.id === presetId);
       if (!preset) return;
       setActivePresetId(preset.id);
       setBlueprint(presetToBlueprint(preset));
+      saveUserSettings({
+        presetId: preset.id,
+        lyricStyle: preset.lyricStyle,
+        edgeStyle: preset.edgeStyle,
+        particles: preset.particles,
+        showSpectrum: preset.showSpectrum,
+      });
       showToast(`Preset: ${preset.name}`);
     },
     [showToast]
@@ -361,12 +405,21 @@ const AuraStage: React.FC = () => {
         showToast('30s Preview — hover the sung line & click Sync to lock!');
       }
 
+      const savedPrefs = loadUserSettings();
+      const applySavedVisualPrefs = (bp: VibeBlueprint): VibeBlueprint => ({
+        ...bp,
+        lyricStyle: savedPrefs.lyricStyle ?? bp.lyricStyle,
+        edgeStyle: savedPrefs.edgeStyle ?? bp.edgeStyle,
+        particles: savedPrefs.particles ?? bp.particles,
+        showSpectrum: savedPrefs.showSpectrum ?? bp.showSpectrum,
+      });
+
       const autoBp = directSongAutonomously({
         song,
         lyrics: fetchedLyrics,
         artworkPalette,
       });
-      setBlueprint(autoBp);
+      setBlueprint(applySavedVisualPrefs(autoBp));
 
       const key = geminiKey.trim();
       if (key) {
@@ -377,7 +430,7 @@ const AuraStage: React.FC = () => {
             song,
             lyrics: fetchedLyrics,
           });
-          setBlueprint(gemBp);
+          setBlueprint(applySavedVisualPrefs(gemBp));
         } catch {
           // keep seamless auto AI
         } finally {
@@ -420,6 +473,7 @@ const AuraStage: React.FC = () => {
         return;
       }
       setInfiniteRadio(true);
+      saveUserSettings({ infiniteRadio: true });
       void playSong(songs[0], songs);
     },
     [playSong, showToast]
@@ -482,7 +536,12 @@ const AuraStage: React.FC = () => {
 
   // Unified 120fps rAF loop
   useEffect(() => {
-    const engine = new LightAudioEngine();
+    const bootPrefs = loadUserSettings();
+    const startupVol = bootPrefs.muted ? 0 : (bootPrefs.volume ?? 0.85);
+    const engine = new LightAudioEngine({
+      volume: startupVol,
+      eq: bootPrefs.eqBands,
+    });
     audioRef.current = engine;
     engine.onPlayStateChange = (playing) => setIsPlaying(playing);
     engine.onDurationChange = (dur) => setDuration(dur);
@@ -502,8 +561,9 @@ const AuraStage: React.FC = () => {
     const channel = new BroadcastChannel('aura-vibe-sync');
     channelRef.current = channel;
 
-    const curP: [number, number, number] = hexToRgb(DEFAULT_BLUEPRINT.palette.primary);
-    const curS: [number, number, number] = hexToRgb(DEFAULT_BLUEPRINT.palette.secondary);
+    const bootBp = buildInitialBlueprint(bootPrefs);
+    const curP: [number, number, number] = hexToRgb(bootBp.palette.primary);
+    const curS: [number, number, number] = hexToRgb(bootBp.palette.secondary);
     let smoothGlowAlpha = 0.45;
     let smoothPulseAlpha = 0.2;
 
@@ -1276,7 +1336,7 @@ const AuraStage: React.FC = () => {
                           <button
                             key={opt.id}
                             type="button"
-                            onClick={() => setBlueprint((b) => ({ ...b, lyricStyle: opt.id }))}
+                            onClick={() => updateVisualSetting({ lyricStyle: opt.id })}
                             className={`py-1.5 px-2 rounded-xl text-xs transition-colors cursor-pointer ${
                               blueprint.lyricStyle === opt.id
                                 ? 'text-black font-semibold'
@@ -1299,7 +1359,7 @@ const AuraStage: React.FC = () => {
                           <button
                             key={opt.id}
                             type="button"
-                            onClick={() => setBlueprint((b) => ({ ...b, edgeStyle: opt.id }))}
+                            onClick={() => updateVisualSetting({ edgeStyle: opt.id })}
                             className={`py-1.5 rounded-xl text-[11px] transition-colors cursor-pointer ${
                               blueprint.edgeStyle === opt.id
                                 ? 'text-black font-semibold'
@@ -1320,7 +1380,7 @@ const AuraStage: React.FC = () => {
                         </span>
                         <button
                           type="button"
-                          onClick={() => setBlueprint((b) => ({ ...b, showSpectrum: !b.showSpectrum }))}
+                          onClick={() => updateVisualSetting({ showSpectrum: !blueprint.showSpectrum })}
                           className={`px-2.5 py-0.5 rounded-full text-[10px] font-mono-code cursor-pointer transition-colors ${
                             blueprint.showSpectrum ? 'text-black font-semibold' : 'bg-white/[0.07] text-white/60'
                           }`}
@@ -1334,7 +1394,7 @@ const AuraStage: React.FC = () => {
                           <button
                             key={opt.id}
                             type="button"
-                            onClick={() => setBlueprint((b) => ({ ...b, particles: opt.id }))}
+                            onClick={() => updateVisualSetting({ particles: opt.id })}
                             className={`py-1.5 rounded-xl text-[11px] transition-colors cursor-pointer ${
                               blueprint.particles === opt.id
                                 ? 'text-black font-semibold'
@@ -1366,8 +1426,10 @@ const AuraStage: React.FC = () => {
                               onClick={() => {
                                 setEqPreset(id);
                                 const eq = EQ_PRESETS[id];
-                                setEqBands({ bass: eq.bass, mid: eq.mid, treble: eq.treble });
+                                const nextBands = { bass: eq.bass, mid: eq.mid, treble: eq.treble };
+                                setEqBands(nextBands);
                                 audioRef.current?.setEq(eq.bass, eq.mid, eq.treble);
+                                saveUserSettings({ eqPreset: id, eqBands: nextBands });
                                 showToast(`Audio EQ: ${eq.label}`);
                               }}
                               className={`px-2.5 py-1 rounded-xl text-[11px] transition-colors cursor-pointer ${
@@ -1404,6 +1466,7 @@ const AuraStage: React.FC = () => {
                                 setEqBands(next);
                                 setEqPreset('custom');
                                 audioRef.current?.setEq(next.bass, next.mid, next.treble);
+                                saveUserSettings({ eqPreset: 'custom', eqBands: next });
                               }}
                               className="aura-slider flex-1"
                             />
@@ -1412,6 +1475,32 @@ const AuraStage: React.FC = () => {
                             </span>
                           </div>
                         ))}
+                      </div>
+
+                      {/* Persistent Master Volume Control */}
+                      <div className="flex items-center gap-3 text-[11px] pt-2 border-t border-white/[0.07]">
+                        <button
+                          type="button"
+                          onClick={toggleMute}
+                          className="flex items-center gap-1.5 w-32 text-white/70 hover:text-white cursor-pointer text-left"
+                          title="Mute / Unmute"
+                        >
+                          {muted || volume === 0 ? <VolumeX className="w-3.5 h-3.5" /> : <Volume2 className="w-3.5 h-3.5" />}
+                          <span>Master Volume</span>
+                        </button>
+                        <input
+                          type="range"
+                          aria-label="Master Volume"
+                          min={0}
+                          max={1}
+                          step={0.01}
+                          value={muted ? 0 : volume}
+                          onChange={(e) => updateVolume(parseFloat(e.target.value))}
+                          className="aura-slider flex-1"
+                        />
+                        <span className="w-10 text-right font-mono-code text-white/80 tabular-nums">
+                          {Math.round((muted ? 0 : volume) * 100)}%
+                        </span>
                       </div>
                     </div>
 
@@ -1486,13 +1575,12 @@ const AuraStage: React.FC = () => {
             queue={queue}
             infiniteRadio={infiniteRadio}
             radioLoading={radioLoading}
-            onToggleInfiniteRadio={() =>
-              setInfiniteRadio((v) => {
-                const next = !v;
-                showToast(next ? 'Infinite Radio Autoplay ON' : 'Loop Queue Mode');
-                return next;
-              })
-            }
+            onToggleInfiniteRadio={() => {
+              const next = !infiniteRadio;
+              setInfiniteRadio(next);
+              saveUserSettings({ infiniteRadio: next });
+              showToast(next ? 'Infinite Radio Autoplay ON' : 'Loop Queue Mode');
+            }}
             onSeekToLine={(sec) => {
               audioRef.current?.seek(sec);
               setLyricOffset(0);
@@ -1573,7 +1661,7 @@ const AuraStage: React.FC = () => {
                   <button
                     key={opt.id}
                     type="button"
-                    onClick={() => setBlueprint((b) => ({ ...b, lyricStyle: opt.id }))}
+                    onClick={() => updateVisualSetting({ lyricStyle: opt.id })}
                     className={`px-3 py-1 rounded-full text-[11px] font-grotesk transition-all duration-300 ease-apple cursor-pointer ${
                       active ? 'text-black font-semibold' : 'oled-pill text-white/65 hover:text-white'
                     }`}
@@ -1676,13 +1764,12 @@ const AuraStage: React.FC = () => {
                 <div className="flex items-center gap-1 sm:gap-1.5 shrink-0">
                   <button
                     type="button"
-                    onClick={() =>
-                      setRepeatOne((r) => {
-                        const next = !r;
-                        showToast(next ? 'Repeat Current Track ON' : 'Repeat One OFF');
-                        return next;
-                      })
-                    }
+                    onClick={() => {
+                      const next = !repeatOne;
+                      setRepeatOne(next);
+                      saveUserSettings({ repeatOne: next });
+                      showToast(next ? 'Repeat Current Track ON' : 'Repeat One OFF');
+                    }}
                     className={`hidden sm:flex p-2 rounded-xl transition-colors cursor-pointer ${
                       repeatOne ? 'text-black' : 'text-white/45 hover:text-white hover:bg-white/[0.08]'
                     }`}
@@ -1718,13 +1805,12 @@ const AuraStage: React.FC = () => {
                   </button>
                   <button
                     type="button"
-                    onClick={() =>
-                      setInfiniteRadio((v) => {
-                        const next = !v;
-                        showToast(next ? '∞ Non-Stop Radio Autoplay ON' : '∞ Autoplay OFF');
-                        return next;
-                      })
-                    }
+                    onClick={() => {
+                      const next = !infiniteRadio;
+                      setInfiniteRadio(next);
+                      saveUserSettings({ infiniteRadio: next });
+                      showToast(next ? '∞ Non-Stop Radio Autoplay ON' : '∞ Autoplay OFF');
+                    }}
                     className={`hidden sm:flex p-2 rounded-xl transition-colors cursor-pointer ${
                       infiniteRadio ? 'text-white bg-white/[0.1]' : 'text-white/40 hover:text-white hover:bg-white/[0.08]'
                     }`}
@@ -1737,32 +1823,28 @@ const AuraStage: React.FC = () => {
 
                 {/* Utility Buttons */}
                 <div className="flex items-center justify-end gap-1 flex-1">
-                  <div className="hidden lg:flex items-center gap-1.5 mr-1">
+                  <div className="hidden sm:flex items-center gap-1.5 mr-1">
                     <button
                       type="button"
-                      onClick={() => {
-                        const next = !muted;
-                        setMuted(next);
-                        audioRef.current?.setVolume(next ? 0 : volume);
-                      }}
+                      onClick={toggleMute}
                       className="p-1.5 text-white/55 hover:text-white cursor-pointer"
+                      title={muted ? 'Unmute' : 'Mute'}
                     >
                       {muted || volume === 0 ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
                     </button>
                     <input
                       type="range"
+                      aria-label="Volume"
                       min={0}
                       max={1}
-                      step={0.02}
+                      step={0.01}
                       value={muted ? 0 : volume}
-                      onChange={(e) => {
-                        const v = parseFloat(e.target.value);
-                        setVolume(v);
-                        setMuted(v === 0);
-                        audioRef.current?.setVolume(v);
-                      }}
-                      className="aura-slider w-14"
+                      onChange={(e) => updateVolume(parseFloat(e.target.value))}
+                      className="aura-slider w-16"
                     />
+                    <span className="text-[10px] font-mono-code text-white/55 tabular-nums w-7 text-right">
+                      {Math.round((muted ? 0 : volume) * 100)}%
+                    </span>
                   </div>
 
                   <button

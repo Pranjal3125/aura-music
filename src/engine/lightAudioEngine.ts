@@ -34,11 +34,18 @@ export class LightAudioEngine {
   public onPlayStateChange?: (playing: boolean) => void;
   public onDurationChange?: (duration: number) => void;
 
-  constructor() {
+  constructor(initial?: { volume?: number; eq?: { bass: number; mid: number; treble: number } }) {
     this.audioEl = new Audio();
     this.audioEl.crossOrigin = 'anonymous';
     this.audioEl.preload = 'auto';
-    this.audioEl.volume = 0.85;
+    const initialVol =
+      typeof initial?.volume === 'number' && Number.isFinite(initial.volume)
+        ? Math.min(1, Math.max(0, initial.volume))
+        : 0.85;
+    this.audioEl.volume = initialVol;
+    if (initial?.eq) {
+      this.setEq(initial.eq.bass, initial.eq.mid, initial.eq.treble);
+    }
 
     this.audioEl.addEventListener('play', () => this.onPlayStateChange?.(true));
     this.audioEl.addEventListener('pause', () => this.onPlayStateChange?.(false));
