@@ -26,10 +26,10 @@ const MOOD_PRESETS: MoodPreset[] = [
     moodName: 'Crimson Nocturne',
     archetype: 'LATE NIGHT SYNTH',
     keywords: /\b(starboy|weeknd|daft|blinding|after hours|midnight|night|neon|lights|star|stars|dark|drive|cyber|synth|shadow|save your tears)\b/i,
-    palette: { primary: '#ff1e42', secondary: '#ff8a00', accent: '#fff3db' },
+    palette: { primary: '#ff1e42', secondary: '#ff8a00', accent: '#fff4de' },
     lyricStyle: 'constellation',
-    edgeStyle: 'laser_orbit',
-    particles: 'stars',
+    edgeStyle: 'lumn_vivid',
+    particles: 'cosmos',
   },
   {
     key: 'golden_soul',
@@ -38,7 +38,7 @@ const MOOD_PRESETS: MoodPreset[] = [
     keywords: /\b(kesariya|kun faya|raataan|apna bana|chaleya|heeriye|shayad|ranjha|golden|sufi|sun|dawn|love|ishq|pyaar|dil|tera|humdum|pritam)\b/i,
     palette: { primary: '#f59e0b', secondary: '#f43f5e', accent: '#fffbeb' },
     lyricStyle: 'constellation',
-    edgeStyle: 'breathing_aura',
+    edgeStyle: 'lumn_vivid',
     particles: 'embers',
   },
   {
@@ -47,7 +47,7 @@ const MOOD_PRESETS: MoodPreset[] = [
     archetype: 'MELANCHOLIC // ACOUSTIC',
     keywords: /\b(tum hi ho|agar tum saath|channa mereya|joji|glimpse|sad|rain|tears|lonely|broken|aashiqui|arijit|atif|lana|billie|hothon|choo lo|memories|slow)\b/i,
     palette: { primary: '#6366f1', secondary: '#ec4899', accent: '#eef2ff' },
-    lyricStyle: 'editorial',
+    lyricStyle: 'branches',
     edgeStyle: 'breathing_aura',
     particles: 'rain',
   },
@@ -57,7 +57,7 @@ const MOOD_PRESETS: MoodPreset[] = [
     archetype: 'HIP-HOP // RAGE // CLUB',
     keywords: /\b(fein|travis|seedhe|maut|nanchaku|krsna|karan aujla|softly|ap dhillon|diljit|brown munde|phonk|trap|rap|hip hop|bass|party|overdrive|club|fire|badshah|honey)\b/i,
     palette: { primary: '#d946ef', secondary: '#06b6d4', accent: '#ffffff' },
-    lyricStyle: 'spotlight',
+    lyricStyle: 'web',
     edgeStyle: 'laser_orbit',
     particles: 'embers',
   },
@@ -68,15 +68,11 @@ const MOOD_PRESETS: MoodPreset[] = [
     keywords: /\b(code|terminal|hacker|matrix|focus|coding|lofi|chill|study|emerald|green|electronic|techno|house)\b/i,
     palette: { primary: '#10b981', secondary: '#06b6d4', accent: '#ecfdf5' },
     lyricStyle: 'codestyle',
-    edgeStyle: 'neon_rim',
-    particles: 'stars',
+    edgeStyle: 'lumn_vivid',
+    particles: 'cosmos',
   },
 ];
 
-/**
- * Instant 0ms Autonomous AI Director.
- * Combines real song title + artist + synced lyrics + real extracted album art colors!
- */
 export function directSongAutonomously(params: {
   song: SongItem;
   lyrics: LyricLine[];
@@ -104,8 +100,6 @@ export function directSongAutonomously(params: {
     }
   }
 
-  // Prefer real vibrant colors extracted directly from the song's album cover (like Lumn!)
-  // unless user explicitly prompted a specific color.
   let palette: VibePalette = artworkPalette ? { ...artworkPalette } : { ...best.palette };
   let lyricStyle: LyricStyleId = best.lyricStyle;
   let edgeStyle: EdgeStyleId = best.edgeStyle;
@@ -119,18 +113,20 @@ export function directSongAutonomously(params: {
     else if (/\b(purple|violet|pink)\b/.test(low)) palette = { primary: '#c026d3', secondary: '#6366f1', accent: '#fdf4ff' };
     else if (/\b(gold|amber|warm|sunset)\b/.test(low)) palette = { primary: '#f59e0b', secondary: '#ef4444', accent: '#fffbeb' };
 
-    if (/\b(constellation|star|stars)\b/.test(low)) { lyricStyle = 'constellation'; particles = 'stars'; }
-    else if (/\b(code|terminal|hacker|matrix)\b/.test(low)) { lyricStyle = 'codestyle'; edgeStyle = 'neon_rim'; }
-    else if (/\b(rain|sad|serif|poetic|lofi)\b/.test(low)) { lyricStyle = 'editorial'; particles = 'rain'; }
-    else if (/\b(apple|spotlight|clean|bold|rap|hip)\b/.test(low)) { lyricStyle = 'spotlight'; }
+    if (/\b(constellation|star|stars)\b/.test(low)) { lyricStyle = 'constellation'; particles = 'cosmos'; }
+    else if (/\b(branch|branches|neural|lightning|tree)\b/.test(low)) { lyricStyle = 'branches'; }
+    else if (/\b(web|spider|trap|rage|rap)\b/.test(low)) { lyricStyle = 'web'; }
+    else if (/\b(liquid|apple|glass|blur)\b/.test(low)) { lyricStyle = 'liquid'; }
+    else if (/\b(code|terminal|hacker|matrix)\b/.test(low)) { lyricStyle = 'codestyle'; }
+    if (/\b(rain|monsoon|sad)\b/.test(low)) particles = 'rain';
   }
 
   return {
     moodName: userPrompt ? `AI · ${best.moodName}` : best.moodName,
     archetype: best.archetype,
     directorNote: userPrompt
-      ? `Steered by "${userPrompt}" · ${lyricStyle} lyrics · ${edgeStyle.replace('_', ' ')}`
-      : `Matched "${song.title}" vibe + album cover aura · ${lyricStyle} lyrics`,
+      ? `Steered by "${userPrompt}" · ${lyricStyle} world · ${edgeStyle.replace('_', ' ')}`
+      : `Matched "${song.title}" vibe + album cover aura · ${lyricStyle} world`,
     source: userPrompt ? 'prompt_ai' : 'auto_ai',
     palette,
     lyricStyle,
@@ -148,25 +144,21 @@ const GEMINI_SCHEMA = {
     palette: {
       type: 'object',
       properties: {
-        primary: { type: 'string', description: 'Vibrant neon hex color #RRGGBB for edge glow & active lyrics' },
-        secondary: { type: 'string', description: 'Complementary accent hex #RRGGBB' },
-        accent: { type: 'string', description: 'Soft high-brightness tint #RRGGBB for highlighted words' },
+        primary: { type: 'string' },
+        secondary: { type: 'string' },
+        accent: { type: 'string' },
       },
       required: ['primary', 'secondary', 'accent'],
     },
-    lyricStyle: { type: 'string', enum: ['constellation', 'spotlight', 'editorial', 'codestyle'] },
-    edgeStyle: { type: 'string', enum: ['laser_orbit', 'neon_rim', 'breathing_aura'] },
-    particles: { type: 'string', enum: ['stars', 'rain', 'embers', 'none'] },
+    lyricStyle: { type: 'string', enum: ['constellation', 'branches', 'web', 'liquid', 'codestyle'] },
+    edgeStyle: { type: 'string', enum: ['lumn_vivid', 'laser_orbit', 'breathing_aura'] },
+    particles: { type: 'string', enum: ['cosmos', 'rain', 'embers', 'none'] },
   },
   required: ['moodName', 'archetype', 'directorNote', 'palette', 'lyricStyle', 'edgeStyle', 'particles'],
 };
 
-const CACHE_KEY = 'aura_oled_gemini_cache_v2';
+const CACHE_KEY = 'aura_oled_gemini_cache_v3';
 
-/**
- * Optional Gemini 4 Hydrogen Multimodal Vibe Director (`v1beta` for album cover vision!).
- * Fast, lightweight JSON art direction — zero heavy shader lag!
- */
 export async function directSongWithGemini(params: {
   apiKey: string;
   song: SongItem;
@@ -188,26 +180,21 @@ export async function directSongWithGemini(params: {
   const client = new GoogleGenAI({ apiKey, apiVersion: 'v1beta' });
   const lyricsSample = lyrics.slice(0, 12).map((l) => l.text).join('\n');
 
-  const prompt = `You are AURA, a minimalist luxury dark-room music aesthetic director (inspired by Verci & Lumn on pure OLED black).
-Pick the exact color palette, lyric visual style, edge lighting choreography, and subtle ambient particles for this song:
+  const prompt = `You are AURA, an ultra-luxury dark-room music aesthetic director (Verci + Lumn on pitch-black OLED).
+Pick the exact vibrant neon palette, lyric visual world (constellation | branches | web | liquid | codestyle), edge lighting style, and atmosphere for this song:
 
 Song: "${song.title}" by "${song.artist}" (Album: "${song.album}")
-${userPrompt ? `User vibe instruction: "${userPrompt}"` : ''}
-${lyricsSample ? `Lyrics snippet:\n${lyricsSample}` : ''}
-
-Return vibrant, cohesive neon colors that look iconic on a pure #000000 dark room screen.`;
+${userPrompt ? `User creative prompt: "${userPrompt}"` : ''}
+${lyricsSample ? `Lyrics:\n${lyricsSample}` : ''}`;
 
   const inputBlocks: Array<Record<string, unknown>> = [{ type: 'text', text: prompt }];
 
-  // Attach album art via fast canvas -> base64 JPEG when CORS allows
   if (song.artworkUrl) {
     try {
       const b64 = await imageUrlToBase64(song.artworkUrl);
-      if (b64) {
-        inputBlocks.push({ type: 'image', mime_type: 'image/jpeg', data: b64 });
-      }
+      if (b64) inputBlocks.push({ type: 'image', mime_type: 'image/jpeg', data: b64 });
     } catch {
-      // text-only still works cleanly
+      // text-only fallback
     }
   }
 
@@ -237,10 +224,7 @@ Return vibrant, cohesive neon colors that look iconic on a pure #000000 dark roo
     textOut.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim()
   ) as Omit<VibeBlueprint, 'source'>;
 
-  const result: VibeBlueprint = {
-    ...parsed,
-    source: 'gemini_4',
-  };
+  const result: VibeBlueprint = { ...parsed, source: 'gemini_4' };
 
   try {
     const map = JSON.parse(localStorage.getItem(CACHE_KEY) || '{}') as Record<string, VibeBlueprint>;

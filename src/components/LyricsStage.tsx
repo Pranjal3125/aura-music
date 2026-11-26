@@ -1,6 +1,7 @@
-import React, { useMemo } from 'react';
+import React from 'react';
 import { Disc3, Minus, Plus } from 'lucide-react';
 import { LyricLine, SongItem, VibeBlueprint } from '../types';
+import { CosmosLyricsCanvas } from './CosmosLyricsCanvas';
 
 interface LyricsStageProps {
   song: SongItem;
@@ -12,11 +13,8 @@ interface LyricsStageProps {
   isPlaying: boolean;
   lyricOffset: number;
   onAdjustOffset: (delta: number) => void;
-}
-
-function seeded(seed: number): number {
-  const x = Math.sin(seed * 91.7 + 17.3) * 43758.5453;
-  return x - Math.floor(x);
+  audioPulseRef: React.MutableRefObject<{ bass: number; beat: number; mid: number }>;
+  pureCinema: boolean;
 }
 
 export const LyricsStage: React.FC<LyricsStageProps> = ({
@@ -29,6 +27,8 @@ export const LyricsStage: React.FC<LyricsStageProps> = ({
   isPlaying,
   lyricOffset,
   onAdjustOffset,
+  audioPulseRef,
+  pureCinema,
 }) => {
   const { primary, accent } = blueprint.palette;
   const style = blueprint.lyricStyle;
@@ -39,32 +39,25 @@ export const LyricsStage: React.FC<LyricsStageProps> = ({
   const nextLine = hasLyrics && activeLineIdx >= 0 && activeLineIdx < lyrics.length - 1 ? lyrics[activeLineIdx + 1] : null;
   const nextLine2 = hasLyrics && activeLineIdx >= 0 && activeLineIdx < lyrics.length - 2 ? lyrics[activeLineIdx + 2] : null;
 
-  // Deterministic constellation node positions (percentage coords inside safe center box)
-  const constellationNodes = useMemo(() => {
-    if (!currentLine) return [];
-    const words = currentLine.words;
-    const count = words.length;
-    return words.map((w, i) => {
-      const seed = (activeLineIdx + 1) * 43 + i * 19;
-      const xPct = count === 1 ? 50 : 12 + (i / (count - 1)) * 76;
-      const zig = i % 2 === 0 ? -1 : 1;
-      const yPct = 50 + zig * (11 + seeded(seed) * 17);
-      return { word: w, xPct, yPct, idx: i };
-    });
-  }, [currentLine, activeLineIdx]);
+  const isCanvasWorld = style === 'constellation' || style === 'branches' || style === 'web';
 
-  // No synced lyrics available OR song at intro before first line -> Luxury Minimalist Album Centerpiece
+  // No synced lyrics or during song intro -> Stunning Lumn Liquid-Glass Vinyl Centerpiece!
   if (!hasLyrics || !currentLine) {
     return (
       <div className="relative z-10 w-full h-full flex flex-col items-center justify-center px-6 text-center select-none">
-        <div className="relative mb-7 flex items-center justify-center">
+        <div className="relative mb-8 flex items-center justify-center">
+          {/* Ambient volumetric album aura */}
+          <div
+            className="absolute w-72 h-72 rounded-full blur-[90px] opacity-40 pointer-events-none"
+            style={{ backgroundColor: primary }}
+          />
           {/* Spinning vinyl peeking behind cover */}
           <div
-            className="absolute right-[-34px] w-48 h-48 sm:w-56 sm:h-56 rounded-full bg-[#09090c] border border-white/10 shadow-2xl flex items-center justify-center animate-vinyl-spin"
+            className="absolute right-[-38px] w-52 h-52 sm:w-60 sm:h-60 rounded-full bg-[#09090d] border border-white/10 shadow-2xl flex items-center justify-center animate-vinyl-spin"
             style={{
               animationPlayState: isPlaying ? 'running' : 'paused',
               backgroundImage:
-                'repeating-radial-gradient(circle, #0c0c10 0px, #0c0c10 3px, #16161d 4px, #0c0c10 5px)',
+                'repeating-radial-gradient(circle, #0b0b10 0px, #0b0b10 3px, #16161f 4px, #0b0b10 5px)',
             }}
           >
             <div className="w-14 h-14 rounded-full flex items-center justify-center" style={{ backgroundColor: primary }}>
@@ -74,9 +67,9 @@ export const LyricsStage: React.FC<LyricsStageProps> = ({
 
           {/* Crisp HD Album Art */}
           <div
-            className="relative w-52 h-52 sm:w-60 sm:h-60 rounded-2xl overflow-hidden border border-white/15 transition-transform duration-300"
+            className="relative w-56 h-56 sm:w-64 sm:h-64 rounded-2xl overflow-hidden border border-white/15 transition-transform duration-300"
             style={{
-              boxShadow: `0 24px 70px rgba(0,0,0,0.9), 0 0 42px ${primary}44`,
+              boxShadow: `0 28px 80px rgba(0,0,0,0.95), 0 0 48px ${primary}55`,
               transform: isPlaying ? 'scale(1)' : 'scale(0.96)',
             }}
           >
@@ -97,10 +90,10 @@ export const LyricsStage: React.FC<LyricsStageProps> = ({
 
         <div className="mt-5 text-[11px] font-mono-code tracking-widest uppercase text-white/35">
           {lyricsLoading
-            ? 'Syncing lyrics...'
+            ? 'Syncing celestial lyrics...'
             : hasLyrics
-              ? '♫  Instrumental intro — lyrics coming up  ♫'
-              : 'Ambient Aura Mode · No synced lyrics found for this track'}
+              ? '♫  Intro — lyrics igniting shortly  ♫'
+              : 'Ambient Edge Aura Mode'}
         </div>
       </div>
     );
@@ -108,205 +101,87 @@ export const LyricsStage: React.FC<LyricsStageProps> = ({
 
   return (
     <div className="relative z-10 w-full h-full flex flex-col items-center justify-center px-6 sm:px-12 select-none">
-      {/* ========================================================
-          STYLE 1: CONSTELLATION (Exact Upgraded Verci Star-Map!)
-          ======================================================== */}
-      {style === 'constellation' && (
-        <div className="relative w-full max-w-5xl h-[54vh] min-h-[300px] flex items-center justify-center">
-          {/* Ghost previous line */}
-          {prevLine && (
-            <div className="absolute top-2 left-1/2 -translate-x-1/2 w-full text-center text-xs sm:text-sm font-grotesk text-white/20 truncate px-6 transition-opacity duration-500">
-              {prevLine.text}
-            </div>
+      {/* ========================================================================
+          120FPS HDR CANVAS WORLDS: CONSTELLATION CAMERA · NEURAL BRANCHES · WEB
+          ======================================================================== */}
+      {isCanvasWorld && (
+        <CosmosLyricsCanvas
+          mode={style}
+          lyrics={lyrics}
+          activeLineIdx={activeLineIdx}
+          activeWordIdx={activeWordIdx}
+          palette={blueprint.palette}
+          audioPulseRef={audioPulseRef}
+          particleMode={blueprint.particles}
+        />
+      )}
+
+      {/* ========================================================================
+          LIQUID GLASS APPLE LYRICS (Soft Blurred Album Aura + Spring Glow Text)
+          ======================================================================== */}
+      {style === 'liquid' && (
+        <>
+          {song.artworkUrl && (
+            <div
+              className="fixed inset-0 pointer-events-none z-0 opacity-28 scale-125"
+              style={{
+                backgroundImage: `url(${song.artworkUrl})`,
+                backgroundSize: 'cover',
+                backgroundPosition: 'center',
+                filter: 'blur(90px) saturate(165%)',
+              }}
+            />
           )}
+          <div className="relative z-10 w-full max-w-4xl flex flex-col items-center text-center space-y-7">
+            <div className="min-h-[30px] text-xl sm:text-2xl font-grotesk font-medium text-white/22 blur-[0.8px] transition-all duration-300">
+              {prevLine?.text || ''}
+            </div>
 
-          {/* Razor-sharp SVG Constellation Filaments */}
-          <svg className="absolute inset-0 w-full h-full pointer-events-none" preserveAspectRatio="none">
-            {constellationNodes.map((node, i) => {
-              if (i === constellationNodes.length - 1) return null;
-              const next = constellationNodes[i + 1];
-              const lit = i <= activeWordIdx;
-              const activeEdge = i === activeWordIdx || i + 1 === activeWordIdx;
-              return (
-                <line
-                  key={`edge-${activeLineIdx}-${i}`}
-                  x1={`${node.xPct}%`}
-                  y1={`${node.yPct}%`}
-                  x2={`${next.xPct}%`}
-                  y2={`${next.yPct}%`}
-                  stroke={activeEdge ? primary : lit ? accent : '#ffffff'}
-                  strokeOpacity={activeEdge ? 0.85 : lit ? 0.42 : 0.14}
-                  strokeWidth={activeEdge ? 1.6 : 1}
-                />
-              );
-            })}
-          </svg>
+            <div className="flex flex-wrap items-center justify-center gap-x-3.5 gap-y-2.5 leading-tight">
+              {currentLine.words.map((wd, idx) => {
+                const isActive = idx === activeWordIdx;
+                const isSung = idx < activeWordIdx;
+                return (
+                  <span
+                    key={`${activeLineIdx}-${idx}`}
+                    className={`font-display text-3xl sm:text-5xl md:text-6xl font-bold transition-all duration-150 ${
+                      isActive ? 'scale-108 -translate-y-1' : ''
+                    }`}
+                    style={{
+                      color: isActive ? accent : isSung ? 'rgba(255,255,255,0.92)' : 'rgba(255,255,255,0.22)',
+                      textShadow: isActive ? `0 0 26px ${primary}, 0 0 56px ${primary}99` : 'none',
+                    }}
+                  >
+                    {wd.text}
+                  </span>
+                );
+              })}
+            </div>
 
-          {/* Constellation Star Nodes & Words */}
-          {constellationNodes.map((node) => {
-            const isActive = node.idx === activeWordIdx;
-            const isSung = node.idx < activeWordIdx;
-            const labelAbove = node.idx % 2 === 0;
-
-            return (
-              <div
-                key={`node-${activeLineIdx}-${node.idx}`}
-                className="absolute -translate-x-1/2 -translate-y-1/2 flex flex-col items-center transition-all duration-200"
-                style={{ left: `${node.xPct}%`, top: `${node.yPct}%` }}
-              >
-                {/* Word Text */}
-                <span
-                  className={`font-grotesk whitespace-nowrap transition-all duration-200 ${
-                    labelAbove ? '-translate-y-7' : 'translate-y-7'
-                  } ${
-                    isActive
-                      ? 'text-2xl sm:text-4xl font-bold scale-110'
-                      : isSung
-                        ? 'text-lg sm:text-2xl font-medium opacity-70'
-                        : 'text-base sm:text-xl font-normal opacity-25'
-                  }`}
-                  style={
-                    isActive
-                      ? {
-                          color: accent,
-                          textShadow: `0 0 18px ${primary}, 0 0 38px ${primary}`,
-                        }
-                      : isSung
-                        ? { color: accent }
-                        : { color: '#ffffff' }
-                  }
-                >
-                  {node.word.text}
-                </span>
-
-                {/* Glowing Celestial Star Vertex */}
-                <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2">
-                  {isActive ? (
-                    <div className="relative flex items-center justify-center">
-                      <span
-                        className="absolute w-10 h-10 rounded-full blur-md opacity-85"
-                        style={{ backgroundColor: primary }}
-                      />
-                      <svg width="18" height="18" viewBox="0 0 24 24" className="relative">
-                        <path
-                          d="M12 0L14.5 9.5L24 12L14.5 14.5L12 24L9.5 14.5L0 12L9.5 9.5Z"
-                          fill={accent}
-                        />
-                      </svg>
-                    </div>
-                  ) : (
-                    <span
-                      className={`block rounded-full ${node.idx % 2 === 0 ? 'animate-twinkle' : ''}`}
-                      style={{
-                        width: isSung ? 6 : 4,
-                        height: isSung ? 6 : 4,
-                        backgroundColor: isSung ? accent : 'rgba(255,255,255,0.4)',
-                        boxShadow: isSung ? `0 0 8px ${primary}` : 'none',
-                      }}
-                    />
-                  )}
-                </div>
+            <div className="space-y-3 pt-2">
+              <div className="text-xl sm:text-2xl font-grotesk font-medium text-white/26 blur-[0.6px] transition-all duration-300">
+                {nextLine?.text || ''}
               </div>
-            );
-          })}
-
-          {/* Ghost next line */}
-          {nextLine && (
-            <div className="absolute bottom-2 left-1/2 -translate-x-1/2 w-full text-center text-xs sm:text-sm font-grotesk text-white/18 truncate px-6">
-              {nextLine.text}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* ========================================================
-          STYLE 2: SPOTLIGHT (Apple Music / Minimal Luxury Sync)
-          ======================================================== */}
-      {style === 'spotlight' && (
-        <div className="w-full max-w-4xl flex flex-col items-center text-center space-y-6">
-          <div className="min-h-[28px] text-lg sm:text-2xl font-grotesk font-medium text-white/20 transition-all duration-300">
-            {prevLine?.text || ''}
-          </div>
-
-          <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-2 leading-tight">
-            {currentLine.words.map((wd, idx) => {
-              const isActive = idx === activeWordIdx;
-              const isSung = idx < activeWordIdx;
-              return (
-                <span
-                  key={`${activeLineIdx}-${idx}`}
-                  className={`font-display text-3xl sm:text-5xl md:text-6xl font-bold transition-all duration-150 ${
-                    isActive ? 'scale-105' : ''
-                  }`}
-                  style={{
-                    color: isActive ? accent : isSung ? 'rgba(255,255,255,0.88)' : 'rgba(255,255,255,0.25)',
-                    textShadow: isActive ? `0 0 24px ${primary}, 0 0 50px ${primary}88` : 'none',
-                  }}
-                >
-                  {wd.text}
-                </span>
-              );
-            })}
-          </div>
-
-          <div className="space-y-2.5 pt-2">
-            <div className="text-lg sm:text-2xl font-grotesk font-medium text-white/28 transition-all duration-300">
-              {nextLine?.text || ''}
-            </div>
-            <div className="text-sm sm:text-lg font-grotesk text-white/12 transition-all duration-300">
-              {nextLine2?.text || ''}
+              <div className="text-base sm:text-lg font-grotesk text-white/12 blur-[1.2px] transition-all duration-300">
+                {nextLine2?.text || ''}
+              </div>
             </div>
           </div>
-        </div>
+        </>
       )}
 
-      {/* ========================================================
-          STYLE 3: EDITORIAL SERIF (Midnight Bollywood / Lofi)
-          ======================================================== */}
-      {style === 'editorial' && (
-        <div className="w-full max-w-4xl flex flex-col items-center text-center space-y-7">
-          <p className="font-serif-editorial italic text-xl sm:text-2xl text-white/22 min-h-[30px]">
-            {prevLine?.text || ''}
-          </p>
-
-          <div className="flex flex-wrap items-center justify-center gap-x-3.5 gap-y-1.5">
-            {currentLine.words.map((wd, idx) => {
-              const isActive = idx === activeWordIdx;
-              const isSung = idx < activeWordIdx;
-              return (
-                <span
-                  key={`${activeLineIdx}-${idx}`}
-                  className="font-serif-editorial italic text-4xl sm:text-6xl font-semibold transition-all duration-200"
-                  style={{
-                    color: isActive ? accent : isSung ? 'rgba(255,250,240,0.84)' : 'rgba(255,255,255,0.24)',
-                    textShadow: isActive ? `0 0 28px ${primary}` : 'none',
-                    transform: isActive ? 'translateY(-3px)' : 'none',
-                  }}
-                >
-                  {wd.text}
-                </span>
-              );
-            })}
-          </div>
-
-          <p className="font-serif-editorial italic text-xl sm:text-2xl text-white/18 min-h-[30px]">
-            {nextLine?.text || ''}
-          </p>
-        </div>
-      )}
-
-      {/* ========================================================
-          STYLE 4: CODESTYLE (Verci Signature Minimal Terminal)
-          ======================================================== */}
+      {/* ========================================================================
+          VERCI CODESTYLE (Crisp 2AM IDE Live-Typed Lyrics)
+          ======================================================================== */}
       {style === 'codestyle' && (
-        <div className="w-full max-w-3xl text-left font-mono-code space-y-4 px-4">
+        <div className="relative z-10 w-full max-w-3xl text-left font-mono-code space-y-4 px-4">
           <div className="text-[11px] uppercase tracking-widest opacity-55" style={{ color: primary }}>
-            {`// now_playing("${song.title}") · ${blueprint.moodName}`}
+            {`// aura.stream("${song.title}")  /* ${blueprint.moodName} */`}
           </div>
 
           {prevLine && (
-            <div className="text-sm sm:text-base text-white/24">
-              <span className="text-white/15 mr-3">&gt;</span>
+            <div className="text-sm sm:text-base text-white/22">
+              <span className="text-white/15 mr-3">01</span>
               {prevLine.text}
             </div>
           )}
@@ -324,7 +199,7 @@ export const LyricsStage: React.FC<LyricsStageProps> = ({
                   key={`${activeLineIdx}-${idx}`}
                   className="transition-colors duration-150"
                   style={{
-                    color: isActive ? accent : isSung ? primary : 'rgba(255,255,255,0.28)',
+                    color: isActive ? accent : isSung ? primary : 'rgba(255,255,255,0.26)',
                     textShadow: isActive ? `0 0 18px ${primary}` : 'none',
                   }}
                 >
@@ -339,7 +214,7 @@ export const LyricsStage: React.FC<LyricsStageProps> = ({
           </div>
 
           {nextLine && (
-            <div className="text-sm text-white/15 pt-1">
+            <div className="text-sm text-white/14 pt-1">
               <span className="mr-3">...</span>
               {nextLine.text}
             </div>
@@ -347,15 +222,14 @@ export const LyricsStage: React.FC<LyricsStageProps> = ({
         </div>
       )}
 
-      {/* Subtle Lyrics Timing Nudge (super handy for 30s Apple Previews or remix tracks!) */}
-      {!song.isFullTrack && hasLyrics && (
-        <div className="mt-8 flex items-center gap-2 text-[10px] font-mono-code text-white/35 hover:text-white/70 transition-colors">
-          <span>30s Preview · Lyrics sync</span>
+      {/* Subtle Sync Offset Nudge ONLY for 30s Previews (hidden in Pure Cinema mode!) */}
+      {!song.isFullTrack && hasLyrics && !pureCinema && (
+        <div className="fixed bottom-28 left-1/2 -translate-x-1/2 z-20 flex items-center gap-2 text-[10px] font-mono-code text-white/35 hover:text-white/80 transition-colors">
+          <span>30s sync</span>
           <button
             type="button"
             onClick={() => onAdjustOffset(-2)}
-            className="p-1 rounded-md bg-white/[0.06] hover:bg-white/[0.14] cursor-pointer"
-            title="Shift lyrics -2s"
+            className="p-1 rounded-md bg-white/[0.06] hover:bg-white/[0.15] cursor-pointer"
           >
             <Minus className="w-3 h-3" />
           </button>
@@ -363,8 +237,7 @@ export const LyricsStage: React.FC<LyricsStageProps> = ({
           <button
             type="button"
             onClick={() => onAdjustOffset(2)}
-            className="p-1 rounded-md bg-white/[0.06] hover:bg-white/[0.14] cursor-pointer"
-            title="Shift lyrics +2s"
+            className="p-1 rounded-md bg-white/[0.06] hover:bg-white/[0.15] cursor-pointer"
           >
             <Plus className="w-3 h-3" />
           </button>

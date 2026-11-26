@@ -4,9 +4,9 @@
   --aura-primary: #ff1e42;
   --aura-secondary: #ff8a00;
   --aura-accent: #fff3db;
-  --aura-bass: 0.12;
-  --aura-beat: 0;
-  --aura-edge-opacity: 0.85;
+  --aura-glow-alpha: 0.55;
+  --aura-pulse-alpha: 0.15;
+  --aura-edge-opacity: 1;
 }
 
 @layer base {
@@ -40,11 +40,11 @@
   font-family: 'JetBrains Mono', ui-monospace, monospace;
 }
 
-/* ============================================================
-   PURE GPU-COMPOSITED LUMN-GRADE OLED EDGE LIGHTING (ZERO LAG!)
-   Driven strictly by CSS custom properties (--aura-bass, --aura-beat)
-   updated via direct DOM ref in rAF -> 0 React re-renders/sec!
-   ============================================================ */
+/* =====================================================================
+   ZERO-REPAINT 120FPS LUMN-GRADE OLED PERIMETER EDGE LIGHTING
+   Static blurred layers animated strictly via GPU `opacity` & `transform`
+   — ZERO per-frame box-shadow rasterization -> silky 120fps on ANY PC!
+   ===================================================================== */
 
 .aura-edge-frame {
   position: fixed;
@@ -52,107 +52,122 @@
   pointer-events: none;
   z-index: 25;
   opacity: var(--aura-edge-opacity);
-  transition: opacity 0.35s ease;
+  transition: opacity 0.6s cubic-bezier(0.22, 1, 0.36, 1);
 }
 
-.aura-edge-glow-inner {
+/* Layer 1: Razor-sharp neon outer bezel hairline (exact Starboy reel frame!) */
+.aura-edge-rim {
+  position: absolute;
+  inset: 0;
+  border: 2px solid var(--aura-primary);
+  box-shadow:
+    inset 0 0 18px var(--aura-primary),
+    inset 0 0 42px color-mix(in srgb, var(--aura-primary) 55%, transparent);
+  opacity: calc(0.55 + var(--aura-glow-alpha) * 0.45);
+  will-change: opacity;
+}
+
+/* Layer 2: Wide velvety ambient edge bleed that swells smoothly on bass kicks */
+.aura-edge-bloom {
   position: absolute;
   inset: 0;
   box-shadow:
-    inset 0 0 calc(26px + var(--aura-bass) * 48px + var(--aura-beat) * 32px) color-mix(in srgb, var(--aura-primary) 72%, transparent),
-    inset 0 0 calc(85px + var(--aura-bass) * 90px) color-mix(in srgb, var(--aura-secondary) 28%, transparent),
-    inset 0 0 2px var(--aura-primary);
-  border: 1.5px solid color-mix(in srgb, var(--aura-primary) 82%, white 18%);
-  will-change: box-shadow;
+    inset 0 0 78px var(--aura-primary),
+    inset 0 0 150px color-mix(in srgb, var(--aura-secondary) 42%, transparent);
+  opacity: var(--aura-pulse-alpha);
+  will-change: opacity;
 }
 
-/* Orbiting luminous edge highlights (smooth GPU transform only!) */
 @keyframes aura-orbit-top {
-  0% { transform: translate3d(-15%, 0, 0); }
-  50% { transform: translate3d(85%, 0, 0); }
-  100% { transform: translate3d(-15%, 0, 0); }
+  0% { transform: translate3d(-20%, 0, 0); }
+  50% { transform: translate3d(88%, 0, 0); }
+  100% { transform: translate3d(-20%, 0, 0); }
 }
 
 @keyframes aura-orbit-side {
-  0% { transform: translate3d(0, -15%, 0); }
-  50% { transform: translate3d(0, 85%, 0); }
-  100% { transform: translate3d(0, -15%, 0); }
+  0% { transform: translate3d(0, -20%, 0); }
+  50% { transform: translate3d(0, 88%, 0); }
+  100% { transform: translate3d(0, -20%, 0); }
 }
 
 .aura-edge-orb-h {
   position: absolute;
-  width: 42vw;
-  height: 110px;
+  width: 44vw;
+  height: 120px;
   border-radius: 999px;
-  filter: blur(55px);
-  opacity: calc(0.32 + var(--aura-bass) * 0.45 + var(--aura-beat) * 0.25);
+  filter: blur(58px);
+  opacity: calc(0.3 + var(--aura-glow-alpha) * 0.55);
   will-change: transform, opacity;
 }
 
 .aura-edge-orb-v {
   position: absolute;
-  width: 110px;
-  height: 44vh;
+  width: 120px;
+  height: 46vh;
   border-radius: 999px;
-  filter: blur(55px);
-  opacity: calc(0.28 + var(--aura-bass) * 0.42 + var(--aura-beat) * 0.25);
+  filter: blur(58px);
+  opacity: calc(0.28 + var(--aura-glow-alpha) * 0.52);
   will-change: transform, opacity;
 }
 
 .aura-orb-top {
-  top: -68px;
+  top: -74px;
   left: 0;
   background: radial-gradient(circle, var(--aura-primary), transparent 72%);
-  animation: aura-orbit-top 11s ease-in-out infinite;
+  animation: aura-orbit-top 12s ease-in-out infinite;
 }
 
 .aura-orb-bottom {
-  bottom: -68px;
+  bottom: -74px;
   left: 0;
   background: radial-gradient(circle, var(--aura-secondary), transparent 72%);
-  animation: aura-orbit-top 13s ease-in-out infinite reverse;
+  animation: aura-orbit-top 14s ease-in-out infinite reverse;
 }
 
 .aura-orb-left {
-  left: -68px;
+  left: -74px;
   top: 0;
   background: radial-gradient(circle, var(--aura-primary), transparent 72%);
-  animation: aura-orbit-side 12s ease-in-out infinite;
+  animation: aura-orbit-side 13s ease-in-out infinite;
 }
 
 .aura-orb-right {
-  right: -68px;
+  right: -74px;
   top: 0;
   background: radial-gradient(circle, var(--aura-secondary), transparent 72%);
-  animation: aura-orbit-side 10s ease-in-out infinite reverse;
+  animation: aura-orbit-side 11s ease-in-out infinite reverse;
 }
 
-/* Subtle OLED ambient radial backdrop (pure GPU, zero lag) */
+/* Subtle OLED center atmospheric wash (pure GPU opacity only) */
 .aura-oled-backdrop {
   position: fixed;
   inset: 0;
   pointer-events: none;
   z-index: 0;
   background:
-    radial-gradient(circle at 50% 46%, color-mix(in srgb, var(--aura-primary) 16%, transparent) 0%, transparent 56%),
-    radial-gradient(circle at 80% 80%, color-mix(in srgb, var(--aura-secondary) 10%, transparent) 0%, transparent 50%),
+    radial-gradient(circle at 50% 48%, color-mix(in srgb, var(--aura-primary) 13%, transparent) 0%, transparent 56%),
     #000000;
-  transform: scale(calc(1 + var(--aura-bass) * 0.05));
-  will-change: transform;
-  transition: background 0.8s ease;
 }
 
 /* Crisp pitch-dark surfaces (zero bleed-through, zero GPU blur lag!) */
 .oled-surface {
-  background: rgba(10, 10, 14, 0.98);
-  border: 1px solid rgba(255, 255, 255, 0.11);
-  box-shadow: 0 22px 60px rgba(0, 0, 0, 0.92);
+  background: rgba(9, 9, 13, 0.97);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.94);
 }
 
 .oled-pill {
-  background: rgba(12, 12, 16, 0.94);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.78);
+  background: rgba(11, 11, 15, 0.93);
+  border: 1px solid rgba(255, 255, 255, 0.11);
+  box-shadow: 0 10px 32px rgba(0, 0, 0, 0.8);
+}
+
+.liquid-glass-card {
+  background: linear-gradient(145deg, rgba(255, 255, 255, 0.09) 0%, rgba(255, 255, 255, 0.02) 100%);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  box-shadow:
+    0 28px 80px rgba(0, 0, 0, 0.85),
+    inset 0 1px 0 rgba(255, 255, 255, 0.22);
 }
 
 @keyframes subtle-spin {
@@ -161,16 +176,7 @@
 }
 
 .animate-vinyl-spin {
-  animation: subtle-spin 14s linear infinite;
-}
-
-@keyframes star-twinkle {
-  0%, 100% { opacity: 0.35; transform: scale(0.85); }
-  50% { opacity: 1; transform: scale(1.18); }
-}
-
-.animate-twinkle {
-  animation: star-twinkle 2.6s ease-in-out infinite;
+  animation: subtle-spin 15s linear infinite;
 }
 
 @keyframes cursor-blink {
@@ -179,10 +185,14 @@
 }
 
 .animate-cursor {
-  animation: cursor-blink 0.9s infinite;
+  animation: cursor-blink 0.88s infinite;
 }
 
-/* Custom slim range slider */
+/* Silky Apple cubic-bezier helper */
+.ease-apple {
+  transition-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
 input[type='range'].aura-slider {
   -webkit-appearance: none;
   appearance: none;

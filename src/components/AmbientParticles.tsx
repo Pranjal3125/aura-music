@@ -1,8 +1,7 @@
 import React, { useEffect, useRef } from 'react';
-import { AmbientParticleId } from '../types';
 
 interface AmbientParticlesProps {
-  mode: AmbientParticleId;
+  mode: 'stars' | 'cosmos' | 'rain' | 'embers' | 'none';
   color: string;
   accent: string;
 }

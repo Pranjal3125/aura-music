@@ -1,8 +1,8 @@
-export type LyricStyleId = 'constellation' | 'spotlight' | 'editorial' | 'codestyle';
+export type LyricStyleId = 'constellation' | 'branches' | 'web' | 'liquid' | 'codestyle';
 
-export type EdgeStyleId = 'laser_orbit' | 'neon_rim' | 'breathing_aura' | 'off';
+export type EdgeStyleId = 'lumn_vivid' | 'laser_orbit' | 'breathing_aura' | 'off';
 
-export type AmbientParticleId = 'stars' | 'rain' | 'embers' | 'none';
+export type AmbientParticleId = 'cosmos' | 'rain' | 'embers' | 'none';
 
 export interface LyricWord {
   text: string;
@@ -22,7 +22,7 @@ export interface SongItem {
   title: string;
   artist: string;
   album: string;
-  duration: number; // seconds
+  duration: number;
   artworkUrl: string;
   audioUrl: string;
   source: 'saavn' | 'itunes' | 'local';

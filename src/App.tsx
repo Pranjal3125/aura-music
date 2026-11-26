@@ -17,6 +17,7 @@ import {
   X,
   Music2,
   Upload,
+  EyeOff,
 } from 'lucide-react';
 import {
   AmbientParticleId,
@@ -47,33 +48,47 @@ function fmtTime(sec: number): string {
   return `${m}:${String(s).padStart(2, '0')}`;
 }
 
+function hexToRgb(hex: string): [number, number, number] {
+  const c = hex.replace('#', '');
+  const f = c.length === 3 ? c.split('').map((x) => x + x).join('') : c;
+  const n = parseInt(f, 16);
+  if (isNaN(n)) return [255, 30, 66];
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+
+function rgbToHex(rgb: [number, number, number]): string {
+  const clamp = (v: number) => Math.max(0, Math.min(255, Math.round(v)));
+  return '#' + [clamp(rgb[0]), clamp(rgb[1]), clamp(rgb[2])].map((x) => x.toString(16).padStart(2, '0')).join('');
+}
+
 const DEFAULT_BLUEPRINT: VibeBlueprint = {
   moodName: 'Crimson Nocturne',
-  archetype: 'OLED AMBIENT',
-  directorNote: 'Search any song — AI automatically matches lighting, palette & synced lyrics.',
+  archetype: 'OLED COSMOS',
+  directorNote: 'Search any song — AI automatically matches lighting, palette & living constellation lyrics.',
   source: 'auto_ai',
-  palette: { primary: '#ff1e42', secondary: '#ff8a00', accent: '#fff3db' },
+  palette: { primary: '#ff1e42', secondary: '#ff8a00', accent: '#fff4de' },
   lyricStyle: 'constellation',
-  edgeStyle: 'laser_orbit',
-  particles: 'stars',
+  edgeStyle: 'lumn_vivid',
+  particles: 'cosmos',
 };
 
 const LYRIC_STYLES: Array<{ id: LyricStyleId; label: string }> = [
   { id: 'constellation', label: 'Constellation' },
-  { id: 'spotlight', label: 'Apple Lyrics' },
-  { id: 'editorial', label: 'Serif' },
-  { id: 'codestyle', label: 'Codestyle' },
+  { id: 'branches', label: 'Branches' },
+  { id: 'web', label: 'Web' },
+  { id: 'liquid', label: 'Liquid' },
+  { id: 'codestyle', label: 'Code' },
 ];
 
 const EDGE_STYLES: Array<{ id: EdgeStyleId; label: string }> = [
-  { id: 'laser_orbit', label: 'Orbit Glow' },
-  { id: 'neon_rim', label: 'Neon Rim' },
-  { id: 'breathing_aura', label: 'Soft Aura' },
+  { id: 'lumn_vivid', label: 'Lumn Vivid' },
+  { id: 'laser_orbit', label: 'Orbit' },
+  { id: 'breathing_aura', label: 'Soft' },
   { id: 'off', label: 'Off' },
 ];
 
 const PARTICLE_STYLES: Array<{ id: AmbientParticleId; label: string }> = [
-  { id: 'stars', label: 'Stars' },
+  { id: 'cosmos', label: 'Stars' },
   { id: 'rain', label: 'Rain' },
   { id: 'embers', label: 'Embers' },
   { id: 'none', label: 'Clean' },
@@ -84,7 +99,6 @@ export function App() {
     () => typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('mode') === 'companion',
     []
   );
-
   if (isCompanion) return <CompanionScreen />;
   return <AuraStage />;
 }
@@ -100,14 +114,12 @@ const AuraStage: React.FC = () => {
   const [volume, setVolume] = useState(0.85);
   const [muted, setMuted] = useState(false);
 
-  // Synced lyrics state (only re-renders when active line or active word changes!)
   const [lyrics, setLyrics] = useState<LyricLine[]>([]);
   const [lyricsLoading, setLyricsLoading] = useState(false);
   const [activeLineIdx, setActiveLineIdx] = useState(-1);
   const [activeWordIdx, setActiveWordIdx] = useState(-1);
   const [lyricOffset, setLyricOffset] = useState(0);
 
-  // AI Vibe Director state
   const [blueprint, setBlueprint] = useState<VibeBlueprint>(DEFAULT_BLUEPRINT);
   const [geminiKey, setGeminiKey] = useState(() => localStorage.getItem('aura_gemini_key') || '');
   const [keyDraft, setKeyDraft] = useState(() => localStorage.getItem('aura_gemini_key') || '');
@@ -117,21 +129,21 @@ const AuraStage: React.FC = () => {
   const [promptInput, setPromptInput] = useState('');
   const [toast, setToast] = useState<string | null>(null);
 
-  // Clean UI state
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [chromeVisible, setChromeVisible] = useState(true);
+  const [pureCinema, setPureCinema] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
 
-  // Direct DOM refs for ZERO-LAG 60fps updates (no React re-renders!)
+  // Zero-lag direct DOM + canvas refs (ZERO React re-renders per frame!)
   const rootRef = useRef<HTMLDivElement | null>(null);
   const seekFillRef = useRef<HTMLDivElement | null>(null);
   const timeLabelRef = useRef<HTMLSpanElement | null>(null);
   const audioRef = useRef<LightAudioEngine | null>(null);
+  const audioPulseRef = useRef({ bass: 0.1, beat: 0, mid: 0.1 });
   const channelRef = useRef<BroadcastChannel | null>(null);
   const hideTimerRef = useRef<number | null>(null);
 
-  // Mutable ref mirrors for rAF loop
   const rafStateRef = useRef({
     lyrics,
     activeLineIdx,
@@ -155,10 +167,9 @@ const AuraStage: React.FC = () => {
     setToast(msg);
     window.setTimeout(() => {
       setToast((cur) => (cur === msg ? null : cur));
-    }, 3500);
+    }, 3200);
   }, []);
 
-  // Load curated real trending songs on first mount
   useEffect(() => {
     let alive = true;
     void loadFeaturedSongs().then((songs) => {
@@ -171,20 +182,6 @@ const AuraStage: React.FC = () => {
     };
   }, []);
 
-  // Apply CSS custom properties whenever blueprint palette / edgeStyle changes
-  useEffect(() => {
-    const el = rootRef.current;
-    if (!el) return;
-    el.style.setProperty('--aura-primary', blueprint.palette.primary);
-    el.style.setProperty('--aura-secondary', blueprint.palette.secondary);
-    el.style.setProperty('--aura-accent', blueprint.palette.accent);
-    el.style.setProperty(
-      '--aura-edge-opacity',
-      blueprint.edgeStyle === 'off' ? '0' : blueprint.edgeStyle === 'breathing_aura' ? '0.68' : '0.95'
-    );
-  }, [blueprint]);
-
-  // Play any selected song (real JioSaavn 320k / Apple iTunes / local MP3)
   const playSong = useCallback(
     async (song: SongItem, newQueue?: SongItem[]) => {
       if (newQueue && newQueue.length > 0) setQueue(newQueue);
@@ -198,17 +195,15 @@ const AuraStage: React.FC = () => {
       setLyricsLoading(true);
       setLyricOffset(0);
 
-      // Start playing immediately!
       const engine = audioRef.current;
       if (engine) {
         try {
           await engine.loadAndPlay(song.audioUrl);
         } catch {
-          showToast('Click Play to start audio playback.');
+          showToast('Click Play to start audio.');
         }
       }
 
-      // Parallel: extract real album colors + fetch real synced lyrics from LRCLIB
       const [artworkPalette, fetchedLyrics] = await Promise.all([
         extractPaletteFromArtwork(song.artworkUrl),
         fetchSyncedLyricsForSong(song),
@@ -217,13 +212,11 @@ const AuraStage: React.FC = () => {
       setLyrics(fetchedLyrics);
       setLyricsLoading(false);
 
-      // For 30s Apple Previews, default lyrics offset near the chorus so words match the preview!
       if (!song.isFullTrack && fetchedLyrics.length > 6) {
         const chorusApprox = Math.round(fetchedLyrics[Math.floor(fetchedLyrics.length * 0.3)].start);
         setLyricOffset(chorusApprox);
       }
 
-      // 0ms Autonomous AI Direction (palette + mood + lyric style + edge glow)
       const autoBp = directSongAutonomously({
         song,
         lyrics: fetchedLyrics,
@@ -231,7 +224,6 @@ const AuraStage: React.FC = () => {
       });
       setBlueprint(autoBp);
 
-      // Optional Gemini 4 Hydrogen refinement when user has saved an API key
       const key = geminiKey.trim();
       if (key) {
         setIsDirecting(true);
@@ -243,7 +235,7 @@ const AuraStage: React.FC = () => {
           });
           setBlueprint(gemBp);
         } catch {
-          // Keep smooth auto AI silently on quota/network error
+          // keep seamless auto AI
         } finally {
           setIsDirecting(false);
         }
@@ -252,7 +244,6 @@ const AuraStage: React.FC = () => {
     [featured, queue.length, geminiKey, showToast]
   );
 
-  // Skip Next / Prev in queue
   const playAdjacent = useCallback(
     (dir: 1 | -1) => {
       const list = queue.length > 0 ? queue : featured;
@@ -264,7 +255,6 @@ const AuraStage: React.FC = () => {
     [queue, featured, activeSong, playSong]
   );
 
-  // Local MP3 / WAV drag-drop or upload
   const handleLocalFile = useCallback(
     (file: File) => {
       const url = URL.createObjectURL(file);
@@ -286,41 +276,78 @@ const AuraStage: React.FC = () => {
     [playSong, queue, showToast]
   );
 
-  // Initialize lightweight audio engine + zero-lag 60fps CSS-var rAF loop
+  // Unified 120fps zero-lag rAF loop: smooth RGB morphing + silky GPU edge alpha + lyric indexing
   useEffect(() => {
     const engine = new LightAudioEngine();
     audioRef.current = engine;
     engine.onPlayStateChange = (playing) => setIsPlaying(playing);
     engine.onDurationChange = (dur) => setDuration(dur);
-    engine.onEnded = () => {
-      // Auto-advance queue cleanly
-      const s = rafStateRef.current.activeSong;
-      if (s && s.isFullTrack) {
-        setIsPlaying(false);
-      }
-    };
 
     const channel = new BroadcastChannel('aura-vibe-sync');
     channelRef.current = channel;
 
-    let rafId = 0;
-    let lastCompanionMs = 0;
+    const curP: [number, number, number] = hexToRgb(DEFAULT_BLUEPRINT.palette.primary);
+    const curS: [number, number, number] = hexToRgb(DEFAULT_BLUEPRINT.palette.secondary);
+    let smoothGlowAlpha = 0.45;
+    let smoothPulseAlpha = 0.2;
 
-    const tick = () => {
-      const now = performance.now();
+    let prevNow = performance.now();
+    let lastCompanionMs = 0;
+    let lastCssColorMs = 0;
+    let rafId = 0;
+
+    const tick = (now: number) => {
+      const dt = Math.min(0.05, Math.max(0.001, (now - prevNow) * 0.001));
+      prevNow = now;
+
       const s = rafStateRef.current;
-      const pulse = engine.samplePulse();
+      const rawPulse = engine.samplePulse();
+
+      // Double-smoothed silky envelope for velvet-smooth edge lighting!
+      const atk = 1 - Math.exp(-16 * dt);
+      const rel = 1 - Math.exp(-4.2 * dt);
+      const ap = audioPulseRef.current;
+      ap.bass += (rawPulse.bass - ap.bass) * (rawPulse.bass > ap.bass ? atk : rel);
+      ap.beat += (rawPulse.beat - ap.beat) * (rawPulse.beat > ap.beat ? atk : rel);
+      ap.mid += (rawPulse.mid - ap.mid) * (rawPulse.mid > ap.mid ? atk : rel);
+
+      const targetGlow = Math.min(1, 0.28 + ap.bass * 0.58 + ap.beat * 0.32);
+      const targetPulse = Math.min(0.96, 0.18 + ap.bass * 0.55 + ap.beat * 0.42);
+      smoothGlowAlpha += (targetGlow - smoothGlowAlpha) * (1 - Math.exp(-8 * dt));
+      smoothPulseAlpha += (targetPulse - smoothPulseAlpha) * (1 - Math.exp(-9 * dt));
+
+      // Smoothly morph edge glow colors on song/mood switch (throttled ~30fps for zero style recalc overhead!)
+      const root = rootRef.current;
+      if (root) {
+        root.style.setProperty('--aura-glow-alpha', smoothGlowAlpha.toFixed(3));
+        root.style.setProperty('--aura-pulse-alpha', smoothPulseAlpha.toFixed(3));
+        root.style.setProperty(
+          '--aura-edge-opacity',
+          s.blueprint.edgeStyle === 'off' ? '0' : s.blueprint.edgeStyle === 'breathing_aura' ? '0.68' : '1'
+        );
+
+        if (now - lastCssColorMs > 32) {
+          lastCssColorMs = now;
+          const tP = hexToRgb(s.blueprint.palette.primary);
+          const tS = hexToRgb(s.blueprint.palette.secondary);
+          const cStep = 1 - Math.exp(-4.5 * 0.032);
+          let changed = false;
+          for (let c = 0; c < 3; c++) {
+            const dP = tP[c] - curP[c];
+            const dS = tS[c] - curS[c];
+            if (Math.abs(dP) > 0.4) { curP[c] += dP * cStep; changed = true; }
+            if (Math.abs(dS) > 0.4) { curS[c] += dS * cStep; changed = true; }
+          }
+          if (changed) {
+            root.style.setProperty('--aura-primary', rgbToHex(curP));
+            root.style.setProperty('--aura-secondary', rgbToHex(curS));
+          }
+        }
+      }
+
       const curSec = engine.getCurrentTime();
       const durSec = engine.getDuration() || s.activeSong?.duration || 0;
 
-      // 1. Direct GPU CSS variable updates (0 React re-renders!)
-      const root = rootRef.current;
-      if (root) {
-        root.style.setProperty('--aura-bass', pulse.bass.toFixed(3));
-        root.style.setProperty('--aura-beat', pulse.beat.toFixed(3));
-      }
-
-      // 2. Direct DOM seek bar + clock text updates (0 React re-renders!)
       if (seekFillRef.current && durSec > 0) {
         seekFillRef.current.style.width = `${Math.min(100, (curSec / durSec) * 100).toFixed(2)}%`;
       }
@@ -328,7 +355,7 @@ const AuraStage: React.FC = () => {
         timeLabelRef.current.textContent = fmtTime(curSec);
       }
 
-      // 3. Lyric index lookup — ONLY trigger React state update when line or word actually changes!
+      // Lyric index tracking — ONLY triggers React state when line or word actually advances!
       if (s.lyrics.length > 0) {
         const lyricTime = curSec + s.lyricOffset;
         let lineIdx = -1;
@@ -360,8 +387,8 @@ const AuraStage: React.FC = () => {
         if (wordIdx !== s.activeWordIdx) setActiveWordIdx(wordIdx);
       }
 
-      // 4. Sync Dual-Monitor Companion Window (~15fps)
-      if (s.activeSong && now - lastCompanionMs > 65) {
+      // Companion Dual-Screen Sync
+      if (s.activeSong && now - lastCompanionMs > 60) {
         lastCompanionMs = now;
         const msg: CompanionSyncMessage = {
           type: 'STATE_SYNC',
@@ -376,8 +403,8 @@ const AuraStage: React.FC = () => {
           currentTime: curSec,
           isPlaying: engine.isPlaying(),
           currentLineText: s.activeLineIdx >= 0 ? s.lyrics[s.activeLineIdx]?.text || '' : '',
-          bass: pulse.bass,
-          beat: pulse.beat,
+          bass: ap.bass,
+          beat: ap.beat,
         };
         channel.postMessage(msg);
       }
@@ -386,7 +413,6 @@ const AuraStage: React.FC = () => {
     };
 
     rafId = requestAnimationFrame(tick);
-
     return () => {
       cancelAnimationFrame(rafId);
       channel.close();
@@ -394,7 +420,6 @@ const AuraStage: React.FC = () => {
     };
   }, []);
 
-  // Steer AI Vibe with natural prompt (uses Gemini 4 if key saved, else instant Autonomous AI)
   const handlePromptSteer = async (e: React.FormEvent) => {
     e.preventDefault();
     const text = promptInput.trim();
@@ -430,25 +455,30 @@ const AuraStage: React.FC = () => {
     }
   };
 
-  // Auto-hide chrome gently during fullscreen playback
+  // Auto-hide HUD cleanly after 3.2s idle during playback for Pure Dark-Room Cinema!
   const wakeChrome = useCallback(() => {
+    if (pureCinema) return;
     setChromeVisible(true);
     if (hideTimerRef.current) window.clearTimeout(hideTimerRef.current);
     if (activeSong && isPlaying && !vibePanelOpen && !searchOpen) {
       hideTimerRef.current = window.setTimeout(() => {
         setChromeVisible(false);
-      }, 6500);
+      }, 3400);
     }
-  }, [activeSong, isPlaying, vibePanelOpen, searchOpen]);
+  }, [activeSong, isPlaying, vibePanelOpen, searchOpen, pureCinema]);
 
   useEffect(() => {
+    if (pureCinema) {
+      setChromeVisible(false);
+      return;
+    }
     if (!activeSong || !isPlaying || vibePanelOpen || searchOpen) {
       setChromeVisible(true);
       if (hideTimerRef.current) window.clearTimeout(hideTimerRef.current);
     } else {
       wakeChrome();
     }
-  }, [activeSong, isPlaying, vibePanelOpen, searchOpen, wakeChrome]);
+  }, [activeSong, isPlaying, vibePanelOpen, searchOpen, pureCinema, wakeChrome]);
 
   const toggleFullscreen = useCallback(() => {
     if (!document.fullscreenElement) void document.documentElement.requestFullscreen?.();
@@ -469,7 +499,6 @@ const AuraStage: React.FC = () => {
     return () => document.removeEventListener('fullscreenchange', onFs);
   }, []);
 
-  // Keyboard shortcuts
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement | null)?.tagName;
@@ -481,19 +510,31 @@ const AuraStage: React.FC = () => {
         toggleFullscreen();
       } else if (e.key === 'c' || e.key === 'C') {
         openCompanion();
+      } else if (e.key === 'h' || e.key === 'H') {
+        setPureCinema((v) => !v);
+      } else if (e.key === 'Escape' && pureCinema) {
+        setPureCinema(false);
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [activeSong, toggleFullscreen, openCompanion]);
+  }, [activeSong, toggleFullscreen, openCompanion, pureCinema]);
 
   const primary = blueprint.palette.primary;
+  const usesCanvasStars =
+    activeSong &&
+    lyrics.length > 0 &&
+    activeLineIdx >= 0 &&
+    (blueprint.lyricStyle === 'constellation' || blueprint.lyricStyle === 'branches' || blueprint.lyricStyle === 'web');
 
   return (
     <div
       ref={rootRef}
       className="relative w-full h-full bg-black text-white overflow-hidden"
       onMouseMove={wakeChrome}
+      onClick={() => {
+        if (pureCinema) setPureCinema(false);
+      }}
       onDragOver={(e) => {
         e.preventDefault();
         setIsDragging(true);
@@ -508,21 +549,24 @@ const AuraStage: React.FC = () => {
         if (f) handleLocalFile(f);
       }}
     >
-      {/* Pure GPU OLED Radial Mood Backdrop (Zero Lag!) */}
+      {/* Pure OLED Center Ambient Wash */}
       <div className="aura-oled-backdrop" />
 
-      {/* Subtle Low-Cost Ambient Particles */}
-      <AmbientParticles
-        mode={blueprint.particles}
-        color={blueprint.palette.primary}
-        accent={blueprint.palette.accent}
-      />
+      {/* Lightweight Ambient Particles on Home / Liquid / Code views (CosmosCanvas renders its own 3D parallax starfield!) */}
+      {!usesCanvasStars && (
+        <AmbientParticles
+          mode={blueprint.particles === 'cosmos' ? 'stars' : blueprint.particles}
+          color={blueprint.palette.primary}
+          accent={blueprint.palette.accent}
+        />
+      )}
 
-      {/* Lumn-Grade Pure GPU Perimeter Ambient Edge Lighting */}
+      {/* Zero-Repaint 120fps Lumn-Grade OLED Perimeter Edge Lighting */}
       {blueprint.edgeStyle !== 'off' && (
         <div className="aura-edge-frame">
-          <div className="aura-edge-glow-inner" />
-          {blueprint.edgeStyle === 'laser_orbit' && (
+          <div className="aura-edge-rim" />
+          <div className="aura-edge-bloom" />
+          {(blueprint.edgeStyle === 'lumn_vivid' || blueprint.edgeStyle === 'laser_orbit') && (
             <>
               <div className="aura-edge-orb-h aura-orb-top" />
               <div className="aura-edge-orb-h aura-orb-bottom" />
@@ -533,10 +577,9 @@ const AuraStage: React.FC = () => {
         </div>
       )}
 
-      {/* Drag & Drop Audio Overlay */}
       {isDragging && (
         <div
-          className="fixed inset-5 z-50 rounded-3xl border-2 border-dashed bg-black/85 flex flex-col items-center justify-center"
+          className="fixed inset-5 z-50 rounded-3xl border-2 border-dashed bg-black/88 flex flex-col items-center justify-center"
           style={{ borderColor: primary }}
         >
           <Upload className="w-10 h-10 mb-3" style={{ color: primary }} />
@@ -545,8 +588,7 @@ const AuraStage: React.FC = () => {
         </div>
       )}
 
-      {/* Toast Notification */}
-      {toast && (
+      {toast && !pureCinema && (
         <div className="fixed top-5 right-5 z-50 oled-pill px-3.5 py-2 rounded-full text-xs text-white/90 flex items-center gap-2">
           <Sparkles className="w-3.5 h-3.5 shrink-0" style={{ color: primary }} />
           <span>{toast}</span>
@@ -554,7 +596,7 @@ const AuraStage: React.FC = () => {
       )}
 
       {/* ====================================================================
-          VIEW A: CLEAN SPOTLIGHT HOME & SONG SEARCH (Before Song Selected)
+          HOME SCREEN — CLEAN SPOTLIGHT SONG SEARCH + INSTANT REAL TRACKS
           ==================================================================== */}
       {!activeSong && (
         <div className="relative z-20 w-full h-full flex flex-col items-center justify-center px-5 py-10 overflow-y-auto">
@@ -562,16 +604,15 @@ const AuraStage: React.FC = () => {
             <div className="flex items-center gap-2.5 mb-2">
               <span
                 className="w-2.5 h-2.5 rounded-full"
-                style={{ backgroundColor: primary, boxShadow: `0 0 14px ${primary}` }}
+                style={{ backgroundColor: primary, boxShadow: `0 0 16px ${primary}` }}
               />
-              <span className="font-display text-2xl sm:text-3xl font-bold tracking-[0.26em]">AURA</span>
+              <span className="font-display text-2xl sm:text-3xl font-bold tracking-[0.28em]">AURA</span>
             </div>
             <p className="text-xs sm:text-sm text-white/50 max-w-md">
-              Search any song — synced lyrics, album-matched edge lighting &amp; AI mood direction on pure OLED black.
+              Search any song — gliding constellation lyrics, neural branches &amp; music-synced OLED edge glow.
             </p>
           </div>
 
-          {/* Hero Song Search Bar */}
           <SearchBar
             accentColor={primary}
             onSelectSong={(song, list) => void playSong(song, list)}
@@ -579,13 +620,12 @@ const AuraStage: React.FC = () => {
             onDropdownToggle={setSearchOpen}
           />
 
-          {/* Instant Playable Real Songs Grid */}
           <div className="w-[min(92vw,760px)] mt-9">
             <div className="flex items-center justify-between mb-3 px-1">
               <span className="text-[11px] font-mono-code uppercase tracking-widest text-white/40">
                 Play Instantly
               </span>
-              <span className="text-[11px] text-white/35">Or drag &amp; drop any MP3</span>
+              <span className="text-[11px] text-white/35">Or drop any MP3 anywhere</span>
             </div>
 
             {featuredLoading ? (
@@ -601,7 +641,7 @@ const AuraStage: React.FC = () => {
                     key={song.id}
                     type="button"
                     onClick={() => void playSong(song, featured)}
-                    className="group flex items-center gap-3 p-2.5 rounded-2xl bg-white/[0.035] hover:bg-white/[0.09] border border-white/[0.07] transition-all text-left cursor-pointer"
+                    className="group flex items-center gap-3 p-2.5 rounded-2xl bg-white/[0.035] hover:bg-white/[0.09] border border-white/[0.07] transition-all duration-300 ease-apple text-left cursor-pointer"
                   >
                     <div className="relative w-11 h-11 rounded-xl overflow-hidden bg-zinc-900 shrink-0">
                       {song.artworkUrl ? (
@@ -626,17 +666,18 @@ const AuraStage: React.FC = () => {
       )}
 
       {/* ====================================================================
-          VIEW B: FULLSCREEN OLED STAGE (When Song Is Playing)
+          PLAYING STAGE — FULLSCREEN CINEMA COSMOS + AUTO-HIDE CHROME
           ==================================================================== */}
       {activeSong && (
         <>
-          {/* Top Bar: Brand + Compact Song Search + AI Mood Pill */}
+          {/* Top Bar */}
           <div
-            className={`fixed top-5 inset-x-5 z-30 flex items-center justify-between gap-3 transition-all duration-300 ${
-              chromeVisible ? 'opacity-100 translate-y-0' : 'opacity-0 -translate-y-3 pointer-events-none'
+            className={`fixed top-5 inset-x-5 z-30 flex items-center justify-between gap-3 transition-all duration-700 ease-apple ${
+              chromeVisible && !pureCinema
+                ? 'opacity-100 translate-y-0'
+                : 'opacity-0 -translate-y-4 pointer-events-none'
             }`}
           >
-            {/* Brand button returns to Home Grid */}
             <button
               type="button"
               onClick={() => {
@@ -649,12 +690,11 @@ const AuraStage: React.FC = () => {
             >
               <span
                 className="w-2 h-2 rounded-full"
-                style={{ backgroundColor: primary, boxShadow: `0 0 10px ${primary}` }}
+                style={{ backgroundColor: primary, boxShadow: `0 0 12px ${primary}` }}
               />
               <span className="font-display text-xs font-bold tracking-[0.22em] text-white/90">AURA</span>
             </button>
 
-            {/* Always-Ready Top Song Search */}
             <SearchBar
               compact
               accentColor={primary}
@@ -663,7 +703,6 @@ const AuraStage: React.FC = () => {
               onDropdownToggle={setSearchOpen}
             />
 
-            {/* Compact AI Vibe Director Button */}
             <button
               type="button"
               onClick={() => setVibePanelOpen((v) => !v)}
@@ -682,7 +721,7 @@ const AuraStage: React.FC = () => {
           </div>
 
           {/* Sleek Popover AI Vibe & Gemini Controls */}
-          {vibePanelOpen && (
+          {vibePanelOpen && !pureCinema && (
             <div className="fixed top-20 right-5 z-40 w-[min(92vw,360px)] oled-surface rounded-3xl p-4 space-y-4">
               <div className="flex items-center justify-between">
                 <div>
@@ -702,7 +741,6 @@ const AuraStage: React.FC = () => {
 
               <p className="text-[11px] text-white/55 leading-relaxed">{blueprint.directorNote}</p>
 
-              {/* Steer Vibe Prompt */}
               <form onSubmit={handlePromptSteer} className="flex items-center gap-1.5">
                 <div className="flex-1 min-w-0 flex items-center gap-2 rounded-xl bg-white/[0.06] border border-white/[0.1] px-2.5 py-1.5">
                   <Wand2 className="w-3.5 h-3.5 text-white/45 shrink-0" />
@@ -710,7 +748,7 @@ const AuraStage: React.FC = () => {
                     type="text"
                     value={promptInput}
                     onChange={(e) => setPromptInput(e.target.value)}
-                    placeholder='e.g. "crimson starboy" or "rainy blue"'
+                    placeholder='e.g. "crimson starboy" or "rainy branches"'
                     className="flex-1 min-w-0 bg-transparent text-xs text-white placeholder:text-white/35 outline-none"
                   />
                 </div>
@@ -724,16 +762,15 @@ const AuraStage: React.FC = () => {
                 </button>
               </form>
 
-              {/* Lyric Style Switcher */}
               <div className="space-y-1.5">
-                <div className="text-[10px] font-mono-code uppercase tracking-widest text-white/40">Lyrics Style</div>
-                <div className="grid grid-cols-2 gap-1.5">
+                <div className="text-[10px] font-mono-code uppercase tracking-widest text-white/40">Visual World</div>
+                <div className="grid grid-cols-3 gap-1.5">
                   {LYRIC_STYLES.map((opt) => (
                     <button
                       key={opt.id}
                       type="button"
                       onClick={() => setBlueprint((b) => ({ ...b, lyricStyle: opt.id }))}
-                      className={`py-1.5 px-2.5 rounded-xl text-xs transition-colors cursor-pointer ${
+                      className={`py-1.5 px-2 rounded-xl text-xs transition-colors cursor-pointer ${
                         blueprint.lyricStyle === opt.id
                           ? 'text-black font-semibold'
                           : 'bg-white/[0.05] hover:bg-white/[0.1] text-white/75'
@@ -746,7 +783,6 @@ const AuraStage: React.FC = () => {
                 </div>
               </div>
 
-              {/* Edge Glow Switcher */}
               <div className="space-y-1.5">
                 <div className="text-[10px] font-mono-code uppercase tracking-widest text-white/40">Edge Lighting</div>
                 <div className="grid grid-cols-4 gap-1.5">
@@ -768,7 +804,6 @@ const AuraStage: React.FC = () => {
                 </div>
               </div>
 
-              {/* Ambient Particles Switcher */}
               <div className="space-y-1.5">
                 <div className="text-[10px] font-mono-code uppercase tracking-widest text-white/40">Atmosphere</div>
                 <div className="grid grid-cols-4 gap-1.5">
@@ -790,7 +825,6 @@ const AuraStage: React.FC = () => {
                 </div>
               </div>
 
-              {/* Optional Gemini 4 API Key */}
               <div className="pt-2.5 border-t border-white/[0.08] space-y-2">
                 <div className="text-[10px] font-mono-code uppercase tracking-widest text-white/45 flex items-center justify-between">
                   <span>Gemini 4 AI (Optional)</span>
@@ -827,7 +861,26 @@ const AuraStage: React.FC = () => {
             </div>
           )}
 
-          {/* Centerpiece: Razor-Sharp OLED Synced Lyrics Stage */}
+          {/* Subtle Cinema Corner Whisper when HUD auto-hides (like a Mac/Verci setup!) */}
+          <div
+            className={`fixed bottom-6 left-7 z-20 flex items-center gap-2.5 pointer-events-none transition-opacity duration-700 ease-apple ${
+              !chromeVisible && !pureCinema ? 'opacity-65' : 'opacity-0'
+            }`}
+          >
+            {activeSong.artworkUrl && (
+              <img
+                src={activeSong.artworkUrl}
+                alt={activeSong.title}
+                className="w-8 h-8 rounded-lg object-cover border border-white/15"
+              />
+            )}
+            <div className="leading-tight">
+              <div className="text-xs font-grotesk font-semibold text-white/90">{activeSong.title}</div>
+              <div className="text-[10px] text-white/50">{activeSong.artist}</div>
+            </div>
+          </div>
+
+          {/* Centerpiece: 120fps Gliding Constellation / Branches / Web / Liquid Stage */}
           <LyricsStage
             song={activeSong}
             lyrics={lyrics}
@@ -838,16 +891,45 @@ const AuraStage: React.FC = () => {
             isPlaying={isPlaying}
             lyricOffset={lyricOffset}
             onAdjustOffset={(delta) => setLyricOffset((v) => v + delta)}
+            audioPulseRef={audioPulseRef}
+            pureCinema={pureCinema}
           />
 
-          {/* Minimalist Floating Bottom Player Bar */}
+          {/* Floating Minimal Bottom Dock with 1-Click Visual World Pills */}
           <div
-            className={`fixed bottom-5 left-1/2 -translate-x-1/2 z-30 w-[min(94vw,820px)] transition-all duration-300 ${
-              chromeVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-4 pointer-events-none'
+            className={`fixed bottom-5 left-1/2 -translate-x-1/2 z-30 w-[min(94vw,840px)] transition-all duration-700 ease-apple ${
+              chromeVisible && !pureCinema
+                ? 'opacity-100 translate-y-0'
+                : 'opacity-0 translate-y-5 pointer-events-none'
             }`}
           >
+            {/* Quick 1-click Visual Style Pills right above player */}
+            <div className="flex items-center justify-center gap-1.5 mb-2 flex-wrap">
+              {LYRIC_STYLES.map((opt) => {
+                const active = blueprint.lyricStyle === opt.id;
+                return (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    onClick={() => setBlueprint((b) => ({ ...b, lyricStyle: opt.id }))}
+                    className={`px-3 py-1 rounded-full text-[11px] font-grotesk transition-all duration-300 ease-apple cursor-pointer ${
+                      active
+                        ? 'text-black font-semibold'
+                        : 'oled-pill text-white/60 hover:text-white'
+                    }`}
+                    style={
+                      active
+                        ? { backgroundColor: primary, boxShadow: `0 0 18px ${primary}77` }
+                        : undefined
+                    }
+                  >
+                    {opt.label}
+                  </button>
+                );
+              })}
+            </div>
+
             <div className="oled-surface rounded-2xl px-4 py-3 flex flex-col gap-2">
-              {/* Ultra-thin Seek Bar (Updated directly via DOM ref — 0 React re-renders!) */}
               <div className="flex items-center gap-3 text-[10px] font-mono-code text-white/45">
                 <span ref={timeLabelRef} className="w-8 text-right">
                   0:00
@@ -874,7 +956,6 @@ const AuraStage: React.FC = () => {
               </div>
 
               <div className="flex items-center justify-between gap-3">
-                {/* Song Thumbnail & Info */}
                 <div className="flex items-center gap-3 min-w-0 flex-1">
                   <div
                     className="w-10 h-10 rounded-lg overflow-hidden bg-zinc-900 shrink-0 border border-white/10"
@@ -899,7 +980,6 @@ const AuraStage: React.FC = () => {
                   </div>
                 </div>
 
-                {/* Transport Controls */}
                 <div className="flex items-center gap-1.5 shrink-0">
                   <button
                     type="button"
@@ -928,9 +1008,8 @@ const AuraStage: React.FC = () => {
                   </button>
                 </div>
 
-                {/* Right Controls: Volume + Companion + Fullscreen */}
                 <div className="flex items-center justify-end gap-1.5 flex-1">
-                  <div className="hidden sm:flex items-center gap-1.5 mr-1">
+                  <div className="hidden md:flex items-center gap-1.5 mr-1">
                     <button
                       type="button"
                       onClick={() => {
@@ -957,6 +1036,18 @@ const AuraStage: React.FC = () => {
                       className="aura-slider w-16"
                     />
                   </div>
+
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setPureCinema(true);
+                    }}
+                    className="p-2 rounded-xl bg-white/[0.06] hover:bg-white/[0.12] text-white/75 hover:text-white cursor-pointer"
+                    title="Pure Zero-UI Cinema Mode (H)"
+                  >
+                    <EyeOff className="w-4 h-4" />
+                  </button>
 
                   <button
                     type="button"
