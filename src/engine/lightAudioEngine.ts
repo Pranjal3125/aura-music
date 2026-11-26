@@ -1,13 +1,18 @@
 /**
  * Studio-Grade Zero-Lag Audio DSP Engine.
  * Supports:
- * - Real 320kbps full streams, Apple previews, local MP3/WAV
+ * - Real 320kbps full streams, Audius streams, Apple previews, local MP3/WAV
+ * - Automatic non-CORS Audio fallback if an audio CDN blocks `crossOrigin="anonymous"`
  * - Live Browser Tab Audio (Spotify Web / YouTube Music) & Room Mic capture!
  * - Real 3-Band Biquad Studio EQ (Bass 90Hz, Vocal Presence 1.8kHz, Treble Air 8kHz)
  * - Zero-allocation 32-bin real-time spectrum + beat envelope!
  */
 export class LightAudioEngine {
-  private audioEl: HTMLAudioElement;
+  private primaryAudio: HTMLAudioElement;
+  private fallbackAudio: HTMLAudioElement;
+  private usingFallback = false;
+  private loadSeq = 0;
+
   private ctx: AudioContext | null = null;
   private analyser: AnalyserNode | null = null;
   private sourceNode: MediaElementAudioSourceNode | null = null;
@@ -20,6 +25,7 @@ export class LightAudioEngine {
   private trebleFilter: BiquadFilterNode | null = null;
 
   private eqState = { bass: 0, mid: 0, treble: 0 };
+  private volumeState = 0.85;
   private freqData = new Uint8Array(128);
   private spectrumOut = new Float32Array(32);
   private corsConnected = false;
@@ -35,29 +41,51 @@ export class LightAudioEngine {
   public onDurationChange?: (duration: number) => void;
 
   constructor(initial?: { volume?: number; eq?: { bass: number; mid: number; treble: number } }) {
-    this.audioEl = new Audio();
-    this.audioEl.crossOrigin = 'anonymous';
-    this.audioEl.preload = 'auto';
     const initialVol =
       typeof initial?.volume === 'number' && Number.isFinite(initial.volume)
         ? Math.min(1, Math.max(0, initial.volume))
         : 0.85;
-    this.audioEl.volume = initialVol;
+    this.volumeState = initialVol;
+
+    this.primaryAudio = new Audio();
+    this.primaryAudio.crossOrigin = 'anonymous';
+    this.primaryAudio.preload = 'auto';
+    this.primaryAudio.volume = initialVol;
+
+    this.fallbackAudio = new Audio();
+    this.fallbackAudio.preload = 'auto';
+    this.fallbackAudio.volume = initialVol;
+
     if (initial?.eq) {
       this.setEq(initial.eq.bass, initial.eq.mid, initial.eq.treble);
     }
 
-    this.audioEl.addEventListener('play', () => this.onPlayStateChange?.(true));
-    this.audioEl.addEventListener('pause', () => this.onPlayStateChange?.(false));
-    this.audioEl.addEventListener('ended', () => {
-      this.onPlayStateChange?.(false);
-      this.onEnded?.();
-    });
-    this.audioEl.addEventListener('loadedmetadata', () => {
-      if (isFinite(this.audioEl.duration) && this.audioEl.duration > 0) {
-        this.onDurationChange?.(this.audioEl.duration);
-      }
-    });
+    const bindEvents = (el: HTMLAudioElement, isFallbackEl: boolean) => {
+      el.addEventListener('play', () => {
+        if (this.usingFallback === isFallbackEl) this.onPlayStateChange?.(true);
+      });
+      el.addEventListener('pause', () => {
+        if (this.usingFallback === isFallbackEl) this.onPlayStateChange?.(false);
+      });
+      el.addEventListener('ended', () => {
+        if (this.usingFallback === isFallbackEl) {
+          this.onPlayStateChange?.(false);
+          this.onEnded?.();
+        }
+      });
+      el.addEventListener('loadedmetadata', () => {
+        if (this.usingFallback === isFallbackEl && isFinite(el.duration) && el.duration > 0) {
+          this.onDurationChange?.(el.duration);
+        }
+      });
+    };
+
+    bindEvents(this.primaryAudio, false);
+    bindEvents(this.fallbackAudio, true);
+  }
+
+  private get activeEl(): HTMLAudioElement {
+    return this.usingFallback ? this.fallbackAudio : this.primaryAudio;
   }
 
   private ensureContext(): AudioContext | null {
@@ -87,7 +115,7 @@ export class LightAudioEngine {
         this.trebleFilter.frequency.value = 7800;
         this.trebleFilter.gain.value = this.eqState.treble;
 
-        this.sourceNode = this.ctx.createMediaElementSource(this.audioEl);
+        this.sourceNode = this.ctx.createMediaElementSource(this.primaryAudio);
         this.sourceNode.connect(this.bassFilter);
         this.bassFilter.connect(this.midFilter);
         this.midFilter.connect(this.trebleFilter);
@@ -138,18 +166,47 @@ export class LightAudioEngine {
   }
 
   public async loadAndPlay(url: string): Promise<void> {
+    const seq = ++this.loadSeq;
     this.stopLiveCapture();
+    this.primaryAudio.pause();
+    this.fallbackAudio.pause();
+
+    this.usingFallback = false;
     this.ensureContext();
     if (this.ctx?.state === 'suspended') {
       await this.ctx.resume().catch(() => {});
     }
-    this.audioEl.src = url;
-    this.audioEl.currentTime = 0;
-    await this.audioEl.play();
+
+    this.primaryAudio.volume = this.volumeState;
+    this.primaryAudio.src = url;
+    this.primaryAudio.currentTime = 0;
+
+    try {
+      await this.primaryAudio.play();
+    } catch (err) {
+      if (seq !== this.loadSeq) return;
+      const errName = err instanceof DOMException ? err.name : '';
+      // Autoplay gesture block -> surface cleanly without switching to fallback
+      if (errName === 'NotAllowedError') {
+        throw err;
+      }
+      if (errName === 'AbortError') {
+        return;
+      }
+      // CORS / Media decode error on crossOrigin="anonymous" -> fall back seamlessly to direct non-CORS <audio>
+      this.primaryAudio.pause();
+      this.primaryAudio.removeAttribute('src');
+      this.usingFallback = true;
+      this.fallbackAudio.volume = this.volumeState;
+      this.fallbackAudio.src = url;
+      this.fallbackAudio.currentTime = 0;
+      await this.fallbackAudio.play();
+    }
   }
 
   public async startTabCapture(): Promise<void> {
-    this.audioEl.pause();
+    this.primaryAudio.pause();
+    this.fallbackAudio.pause();
     this.stopLiveCapture();
     const ctx = this.ensureContext();
     if (!ctx || !this.analyser) throw new Error('AudioContext unavailable');
@@ -175,7 +232,7 @@ export class LightAudioEngine {
     this.liveMode = 'tab';
 
     try {
-      this.analyser.disconnect(); // avoid echo loop!
+      this.analyser.disconnect();
     } catch {
       // ignore
     }
@@ -190,7 +247,8 @@ export class LightAudioEngine {
   }
 
   public async startMicCapture(): Promise<void> {
-    this.audioEl.pause();
+    this.primaryAudio.pause();
+    this.fallbackAudio.pause();
     this.stopLiveCapture();
     const ctx = this.ensureContext();
     if (!ctx || !this.analyser) throw new Error('AudioContext unavailable');
@@ -213,8 +271,10 @@ export class LightAudioEngine {
 
   public play(): void {
     if (this.liveMode !== 'none') return;
-    this.ensureContext();
-    void this.audioEl.play();
+    if (!this.usingFallback) this.ensureContext();
+    void this.activeEl.play().catch(() => {
+      // Ignore transient play rejection (e.g. autoplay lock before user gesture)
+    });
   }
 
   public pause(): void {
@@ -223,7 +283,7 @@ export class LightAudioEngine {
       this.onPlayStateChange?.(false);
       return;
     }
-    this.audioEl.pause();
+    this.activeEl.pause();
   }
 
   public togglePlay(): void {
@@ -232,32 +292,36 @@ export class LightAudioEngine {
       this.onPlayStateChange?.(false);
       return;
     }
-    if (this.audioEl.paused) this.play();
+    if (this.activeEl.paused) this.play();
     else this.pause();
   }
 
   public isPlaying(): boolean {
     if (this.liveMode !== 'none') return true;
-    return !this.audioEl.paused && !this.audioEl.ended;
+    return !this.activeEl.paused && !this.activeEl.ended;
   }
 
   public seek(sec: number): void {
     if (this.liveMode !== 'none') return;
     if (isFinite(sec)) {
-      this.audioEl.currentTime = Math.max(0, Math.min(this.getDuration() || sec, sec));
+      const dur = this.getDuration();
+      this.activeEl.currentTime = Math.max(0, dur > 0 ? Math.min(dur, sec) : sec);
     }
   }
 
   public setVolume(v: number): void {
-    this.audioEl.volume = Math.max(0, Math.min(1, v));
+    const clamped = Math.max(0, Math.min(1, v));
+    this.volumeState = clamped;
+    this.primaryAudio.volume = clamped;
+    this.fallbackAudio.volume = clamped;
   }
 
   public getCurrentTime(): number {
-    return this.audioEl.currentTime || 0;
+    return this.activeEl.currentTime || 0;
   }
 
   public getDuration(): number {
-    return isFinite(this.audioEl.duration) ? this.audioEl.duration : 0;
+    return isFinite(this.activeEl.duration) ? this.activeEl.duration : 0;
   }
 
   public samplePulse(): { bass: number; beat: number; mid: number; spectrum: Float32Array } {
@@ -274,7 +338,7 @@ export class LightAudioEngine {
       return { bass: this.smoothBass, beat: this.beatPulse, mid: idle, spectrum: this.spectrumOut };
     }
 
-    if (this.analyser && (this.corsConnected || this.liveMode !== 'none')) {
+    if (this.analyser && ((!this.usingFallback && this.corsConnected) || this.liveMode !== 'none')) {
       this.analyser.getByteFrequencyData(this.freqData);
       let bSum = 0;
       for (let i = 1; i < 8; i++) bSum += this.freqData[i];
@@ -313,17 +377,24 @@ export class LightAudioEngine {
     }
 
     const t = now * 0.001;
-    const synthBass = 0.26 + 0.22 * Math.pow(0.5 + 0.5 * Math.sin(t * 6.2), 2);
+    const synthBass = 0.26 + 0.24 * Math.pow(0.5 + 0.5 * Math.sin(t * 6.4), 2);
     for (let i = 0; i < 32; i++) {
-      this.spectrumOut[i] = 0.14 + 0.22 * Math.abs(Math.sin(t * 4.2 + i * 0.28));
+      this.spectrumOut[i] = 0.14 + 0.24 * Math.abs(Math.sin(t * 4.4 + i * 0.28) * Math.cos(t * 1.7 + i * 0.11));
     }
-    return { bass: synthBass, beat: Math.max(0, synthBass - 0.35), mid: 0.3, spectrum: this.spectrumOut };
+    return {
+      bass: synthBass,
+      beat: Math.max(0, (synthBass - 0.34) * 1.5),
+      mid: 0.3 + 0.15 * Math.sin(t * 3.1),
+      spectrum: this.spectrumOut,
+    };
   }
 
   public dispose(): void {
     this.stopLiveCapture();
-    this.audioEl.pause();
-    this.audioEl.src = '';
+    this.primaryAudio.pause();
+    this.primaryAudio.src = '';
+    this.fallbackAudio.pause();
+    this.fallbackAudio.src = '';
     if (this.ctx) {
       void this.ctx.close();
       this.ctx = null;

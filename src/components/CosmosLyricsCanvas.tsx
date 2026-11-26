@@ -1324,5 +1324,11 @@ export const CosmosLyricsCanvas: React.FC<CosmosLyricsCanvasProps> = ({
     };
   }, [audioPulseRef]);
 
-  return <canvas ref={canvasRef} className="fixed inset-0 w-full h-full pointer-events-none z-[5]" />;
+  return (
+    <canvas
+      ref={canvasRef}
+      data-aura-stage-canvas="true"
+      className="fixed inset-0 w-full h-full pointer-events-none z-[5]"
+    />
+  );
 };

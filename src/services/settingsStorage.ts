@@ -24,12 +24,17 @@ export interface AuraUserSettings {
   edgeStyle?: EdgeStyleId;
   particles?: AmbientParticleId;
   showSpectrum?: boolean;
+  visualIcons?: boolean;
+  lockPreset?: boolean;
   infiniteRadio?: boolean;
   repeatOne?: boolean;
+  shuffle?: boolean;
 }
 
 const VALID_LYRIC_STYLES: readonly LyricStyleId[] = [
+  'apple_ui',
   'constellation',
+  'fisheye',
   'branches',
   'web',
   'tunnel',
@@ -44,6 +49,7 @@ const VALID_LYRIC_STYLES: readonly LyricStyleId[] = [
 const VALID_EDGE_STYLES: readonly EdgeStyleId[] = [
   'lumn_vivid',
   'laser_orbit',
+  'violet_prism',
   'breathing_aura',
   'off',
 ];
@@ -68,7 +74,7 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
-function sanitizeSettings(raw: unknown): AuraUserSettings {
+export function sanitizeSettings(raw: unknown): AuraUserSettings {
   if (!raw || typeof raw !== 'object') return {};
   const obj = raw as Record<string, unknown>;
   const out: AuraUserSettings = {};
@@ -126,11 +132,20 @@ function sanitizeSettings(raw: unknown): AuraUserSettings {
   if (typeof obj.showSpectrum === 'boolean') {
     out.showSpectrum = obj.showSpectrum;
   }
+  if (typeof obj.visualIcons === 'boolean') {
+    out.visualIcons = obj.visualIcons;
+  }
+  if (typeof obj.lockPreset === 'boolean') {
+    out.lockPreset = obj.lockPreset;
+  }
   if (typeof obj.infiniteRadio === 'boolean') {
     out.infiniteRadio = obj.infiniteRadio;
   }
   if (typeof obj.repeatOne === 'boolean') {
     out.repeatOne = obj.repeatOne;
+  }
+  if (typeof obj.shuffle === 'boolean') {
+    out.shuffle = obj.shuffle;
   }
 
   return out;
@@ -187,7 +202,6 @@ export function loadUserSettings(): AuraUserSettings {
       const stored = window.localStorage.getItem(PREFS_COOKIE_NAME);
       if (stored) {
         const parsed = sanitizeSettings(JSON.parse(stored));
-        // Mirror recovered localStorage settings back into cookie
         writeCookieAndStorage(parsed);
         return parsed;
       }

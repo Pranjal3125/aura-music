@@ -6,6 +6,7 @@ import { searchRealSongs } from '../services/musicApi';
 interface SearchBarProps {
   compact?: boolean;
   accentColor: string;
+  externalQuery?: { query: string; nonce: number } | string;
   onSelectSong: (song: SongItem, queue: SongItem[]) => void;
   onAddToQueue?: (song: SongItem) => void;
   onUploadLocalFile: (file: File) => void;
@@ -21,6 +22,7 @@ function formatDur(sec: number): string {
 export const SearchBar: React.FC<SearchBarProps> = ({
   compact = false,
   accentColor,
+  externalQuery,
   onSelectSong,
   onAddToQueue,
   onUploadLocalFile,
@@ -30,8 +32,18 @@ export const SearchBar: React.FC<SearchBarProps> = ({
   const [results, setResults] = useState<SongItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [open, setOpen] = useState(false);
+  const [highlightIdx, setHighlightIdx] = useState(-1);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    const qVal = typeof externalQuery === 'string' ? externalQuery : externalQuery?.query;
+    if (qVal) {
+      setQuery(qVal);
+      setOpen(true);
+      inputRef.current?.focus();
+    }
+  }, [externalQuery]);
 
   useEffect(() => {
     onDropdownToggle?.(open);
@@ -72,6 +84,7 @@ export const SearchBar: React.FC<SearchBarProps> = ({
     if (trimmed.length < 2) {
       setResults([]);
       setLoading(false);
+      setHighlightIdx(-1);
       return;
     }
 
@@ -82,9 +95,10 @@ export const SearchBar: React.FC<SearchBarProps> = ({
       if (!cancelled) {
         setResults(found);
         setLoading(false);
+        setHighlightIdx(-1);
         setOpen(true);
       }
-    }, 280);
+    }, 260);
 
     return () => {
       cancelled = true;
@@ -92,8 +106,24 @@ export const SearchBar: React.FC<SearchBarProps> = ({
     };
   }, [query]);
 
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (!open || results.length === 0) return;
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setHighlightIdx((i) => (i + 1) % results.length);
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setHighlightIdx((i) => (i <= 0 ? results.length - 1 : i - 1));
+    } else if (e.key === 'Enter' && highlightIdx >= 0 && results[highlightIdx]) {
+      e.preventDefault();
+      onSelectSong(results[highlightIdx], results);
+      setOpen(false);
+      inputRef.current?.blur();
+    }
+  };
+
   return (
-    <div ref={containerRef} className={`relative ${compact ? 'w-[min(66vw,430px)]' : 'w-[min(92vw,580px)]'}`}>
+    <div ref={containerRef} className={`relative z-[80] ${compact ? 'w-[min(64vw,430px)]' : 'w-[min(92vw,600px)]'}`}>
       <div
         className={`oled-pill rounded-full flex items-center gap-2.5 transition-all ${
           compact ? 'px-4 py-2' : 'px-5 py-3.5'
@@ -101,8 +131,8 @@ export const SearchBar: React.FC<SearchBarProps> = ({
         style={
           open
             ? {
-                borderColor: `${accentColor}88`,
-                boxShadow: `0 12px 40px rgba(0,0,0,0.85), 0 0 24px ${accentColor}2a`,
+                borderColor: `${accentColor}99`,
+                boxShadow: `0 12px 44px rgba(0,0,0,0.88), 0 0 28px ${accentColor}38`,
               }
             : undefined
         }
@@ -120,8 +150,9 @@ export const SearchBar: React.FC<SearchBarProps> = ({
           onFocus={() => {
             if (results.length > 0) setOpen(true);
           }}
+          onKeyDown={handleKeyDown}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder={compact ? 'Search song... (Press /)' : 'Search song, artist, or vibe (e.g. Kesariya, Starboy)...'}
+          placeholder={compact ? 'Search song... (Press /)' : 'Search any song or artist (e.g. No Lie, Starboy, Tum Hi Ho)...'}
           className={`flex-1 min-w-0 bg-transparent text-white placeholder:text-white/40 outline-none ${
             compact ? 'text-xs sm:text-sm' : 'text-sm sm:text-base'
           }`}
@@ -162,17 +193,19 @@ export const SearchBar: React.FC<SearchBarProps> = ({
       </div>
 
       {open && (results.length > 0 || (!loading && query.trim().length >= 2)) && (
-        <div className="absolute left-0 right-0 mt-2.5 oled-surface rounded-2xl overflow-hidden max-h-[60vh] overflow-y-auto z-50 animate-panel-in">
+        <div className="absolute left-0 right-0 mt-2.5 oled-surface rounded-2xl overflow-hidden max-h-[60vh] overflow-y-auto z-[90] animate-panel-in">
           {results.length === 0 ? (
             <div className="p-5 text-center text-xs text-white/50">
               No songs matched &ldquo;{query}&rdquo;. Try another song or artist name.
             </div>
           ) : (
             <div className="divide-y divide-white/[0.05]">
-              {results.map((song) => (
+              {results.map((song, idx) => (
                 <div
                   key={song.id}
-                  className="aura-card-sheen px-3.5 py-2.5 flex items-center gap-3 hover:bg-white/[0.07] transition-colors group"
+                  className={`aura-card-sheen px-3.5 py-2.5 flex items-center gap-3 transition-colors group ${
+                    highlightIdx === idx ? 'bg-white/[0.1]' : 'hover:bg-white/[0.07]'
+                  }`}
                 >
                   <button
                     type="button"
@@ -208,22 +241,24 @@ export const SearchBar: React.FC<SearchBarProps> = ({
                         type="button"
                         onClick={() => onAddToQueue(song)}
                         title="Add to Queue"
-                        className="p-1.5 rounded-lg bg-white/[0.05] hover:bg-white/[0.15] text-white/55 hover:text-white opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"
+                        className="p-1.5 rounded-lg bg-white/[0.05] hover:bg-white/[0.15] text-white/55 hover:text-white opacity-75 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity cursor-pointer"
                       >
                         <Plus className="w-3.5 h-3.5" />
                       </button>
                     )}
                     <span
                       className={`px-2 py-0.5 rounded-full text-[10px] font-mono-code font-semibold ${
-                        song.isFullTrack
+                        song.source === 'saavn'
                           ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
-                          : 'bg-white/[0.07] text-white/55'
+                          : song.source === 'audius'
+                            ? 'bg-violet-500/15 text-violet-300 border border-violet-500/30'
+                            : 'bg-white/[0.07] text-white/55'
                       }`}
                     >
                       {song.isFullTrack ? 'FULL' : '30s'}
                     </span>
                     <span className="text-[11px] font-mono-code text-white/40 w-9 text-right">
-                      {formatDur(song.duration)}
+                      {formatDur(song.fullDuration || song.duration)}
                     </span>
                   </div>
                 </div>

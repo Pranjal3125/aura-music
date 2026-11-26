@@ -1,7 +1,10 @@
 import React from 'react';
-import { Disc3, Radio } from 'lucide-react';
+import { Disc3, Radio, Search, Sparkles } from 'lucide-react';
 import { LyricLine, SongItem, VibeBlueprint } from '../types';
 import { AudioPulseState, CanvasLyricMode, CosmosLyricsCanvas } from './CosmosLyricsCanvas';
+import { AppleUiLyricsStage } from './AppleUiLyricsStage';
+import { FisheyeLyricsStage } from './FisheyeLyricsStage';
+import { getWordVisualIcon, type LyricPhase } from '../services/lyricSync';
 
 interface LyricsStageProps {
   song: SongItem;
@@ -9,9 +12,15 @@ interface LyricsStageProps {
   lyricsLoading: boolean;
   activeLineIdx: number;
   activeWordIdx: number;
+  upcomingLineIdx: number;
+  secondsUntilNext: number;
+  phase: LyricPhase;
   blueprint: VibeBlueprint;
   isPlaying: boolean;
+  visualIcons: boolean;
   audioPulseRef: React.MutableRefObject<AudioPulseState>;
+  onJumpToTime?: (sec: number) => void;
+  onOpenLyricsSearch?: () => void;
 }
 
 const CANVAS_WORLDS: readonly string[] = [
@@ -23,15 +32,26 @@ const CANVAS_WORLDS: readonly string[] = [
   'glitch',
 ];
 
+function fmtCountdown(sec: number): string {
+  const s = Math.max(0, Math.ceil(sec));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+}
+
 export const LyricsStage: React.FC<LyricsStageProps> = ({
   song,
   lyrics,
   lyricsLoading,
   activeLineIdx,
   activeWordIdx,
+  upcomingLineIdx,
+  secondsUntilNext,
+  phase,
   blueprint,
   isPlaying,
+  visualIcons,
   audioPulseRef,
+  onJumpToTime,
+  onOpenLyricsSearch,
 }) => {
   const { primary, secondary, accent } = blueprint.palette;
   const style = blueprint.lyricStyle;
@@ -39,14 +59,25 @@ export const LyricsStage: React.FC<LyricsStageProps> = ({
   const hasLyrics = lyrics.length > 0;
   const currentLine = hasLyrics && activeLineIdx >= 0 ? lyrics[activeLineIdx] : null;
   const prevLine = hasLyrics && activeLineIdx > 0 ? lyrics[activeLineIdx - 1] : null;
-  const nextLine = hasLyrics && activeLineIdx >= 0 && activeLineIdx < lyrics.length - 1 ? lyrics[activeLineIdx + 1] : null;
-  const nextLine2 = hasLyrics && activeLineIdx >= 0 && activeLineIdx < lyrics.length - 2 ? lyrics[activeLineIdx + 2] : null;
+  const nextLine =
+    hasLyrics && activeLineIdx >= 0 && activeLineIdx < lyrics.length - 1 ? lyrics[activeLineIdx + 1] : null;
+  const nextLine2 =
+    hasLyrics && activeLineIdx >= 0 && activeLineIdx < lyrics.length - 2 ? lyrics[activeLineIdx + 2] : null;
+
+  const upcomingLine =
+    hasLyrics && upcomingLineIdx >= 0 && upcomingLineIdx < lyrics.length
+      ? lyrics[upcomingLineIdx]
+      : null;
+  const upcomingLine2 =
+    hasLyrics && upcomingLineIdx >= 0 && upcomingLineIdx + 1 < lyrics.length
+      ? lyrics[upcomingLineIdx + 1]
+      : null;
 
   const isCanvasWorld = CANVAS_WORLDS.includes(style);
   const isLiveStream = song.source === 'live_tab' || song.source === 'live_mic';
 
-  // No synced lyrics OR Live Audio Capture OR Intro -> Luxury Vinyl + Sonic Halo Centerpiece
-  if (!hasLyrics || !currentLine || isLiveStream) {
+  // Live Audio Capture OR No Lyrics Available Yet -> Luxury Vinyl + Sonic Halo Centerpiece
+  if (!hasLyrics || isLiveStream) {
     return (
       <div className="relative z-10 w-full h-full flex flex-col items-center justify-center px-6 text-center select-none">
         <div className="relative mb-8 flex items-center justify-center">
@@ -104,27 +135,57 @@ export const LyricsStage: React.FC<LyricsStageProps> = ({
         </h1>
         <p className="text-sm sm:text-base text-white/55 font-grotesk mt-1.5">{song.artist}</p>
 
-        <div className="mt-5 text-[11px] font-mono-code tracking-widest uppercase text-white/40">
-          {lyricsLoading
-            ? 'Syncing celestial lyrics...'
-            : isLiveStream
-              ? 'Live Audio Edge Aura · Reacting in real time'
-              : hasLyrics
-                ? '♫  Intro — lyrics igniting shortly  ♫'
-                : 'Ambient Edge Aura Mode'}
+        <div className="mt-5 flex flex-col items-center gap-3">
+          <div className="text-[11px] font-mono-code tracking-widest uppercase text-white/45">
+            {lyricsLoading
+              ? 'Syncing celestial lyrics...'
+              : isLiveStream
+                ? 'Live Audio Edge Aura · Reacting in real time'
+                : 'No synced lyrics matched automatically'}
+          </div>
+          {!lyricsLoading && !isLiveStream && onOpenLyricsSearch && (
+            <button
+              type="button"
+              onClick={onOpenLyricsSearch}
+              className="oled-pill px-3.5 py-1.5 rounded-full text-xs text-white/85 hover:text-white flex items-center gap-1.5 cursor-pointer"
+            >
+              <Search className="w-3.5 h-3.5" style={{ color: primary }} />
+              <span>Find / Sync Lyrics Manually</span>
+            </button>
+          )}
         </div>
       </div>
     );
   }
 
+  // Flagship Viral Reel Mode: Apple UI (iMessage + Apple Pay + Dynamic Island + Frosted Cards)
+  if (style === 'apple_ui') {
+    return (
+      <AppleUiLyricsStage
+        song={song}
+        lyrics={lyrics}
+        activeLineIdx={activeLineIdx}
+        activeWordIdx={activeWordIdx}
+        upcomingLineIdx={upcomingLineIdx}
+        secondsUntilNext={secondsUntilNext}
+        phase={phase}
+        blueprint={blueprint}
+        isPlaying={isPlaying}
+        visualIcons={visualIcons}
+        audioPulseRef={audioPulseRef}
+        onJumpToTime={onJumpToTime}
+      />
+    );
+  }
+
   const lineProgPct =
-    currentLine.words.length > 0
+    currentLine && currentLine.words.length > 0
       ? Math.min(100, Math.max(4, ((Math.max(0, activeWordIdx) + 1) / currentLine.words.length) * 100))
       : 100;
 
   return (
-    <div className="relative z-10 w-full h-full flex flex-col items-center justify-center px-6 sm:px-12 select-none">
-      {/* 120FPS CANVAS WORLDS: CONSTELLATION · BRANCHES · WEB · HYPERWARP · PRISM · CYBER */}
+    <div className="relative z-10 w-full h-full flex flex-col items-center justify-center px-6 sm:px-12 pt-14 pb-28 select-none">
+      {/* 120FPS CANVAS WORLDS STAY MOUNTED EVEN DURING INTROS, INTERLUDES & OUTRO */}
       {isCanvasWorld && (
         <CosmosLyricsCanvas
           mode={style as CanvasLyricMode}
@@ -137,8 +198,90 @@ export const LyricsStage: React.FC<LyricsStageProps> = ({
         />
       )}
 
+      {/* OUTRO HOLD FOR NON-APPLE-UI, NON-CANVAS MODES */}
+      {!currentLine && !upcomingLine && !isCanvasWorld && (
+        <div className="relative z-10 w-full max-w-xl flex flex-col items-center text-center space-y-3 animate-panel-in">
+          <div className="text-[10px] font-mono-code uppercase tracking-[0.26em] text-white/40">
+            Outro · {song.title}
+          </div>
+          <div
+            className="font-display text-2xl sm:text-4xl font-bold text-white/80 leading-snug"
+            style={{ textShadow: `0 0 28px ${primary}66` }}
+          >
+            {lyrics[lyrics.length - 1]?.text}
+          </div>
+        </div>
+      )}
+
+      {/* INTRO / INTERLUDE OVERLAY FOR NON-APPLE-UI MODES SO LYRICS ARE ALWAYS VISIBLE */}
+      {!currentLine && upcomingLine && (
+        <div className="relative z-10 w-full max-w-2xl flex flex-col items-center text-center space-y-6 animate-panel-in">
+          <div className="oled-surface rounded-3xl p-5 sm:p-6 flex items-center gap-4 border border-white/15 max-w-md w-full">
+            <div
+              className="w-16 h-16 rounded-2xl overflow-hidden bg-zinc-900 shrink-0 border border-white/15"
+              style={{ boxShadow: `0 0 24px ${primary}44` }}
+            >
+              {song.artworkUrl ? (
+                <img src={song.artworkUrl} alt={song.title} className="w-full h-full object-cover" />
+              ) : (
+                <Disc3 className="w-8 h-8 m-4 text-white/30 animate-vinyl-spin" />
+              )}
+            </div>
+            <div className="flex-1 min-w-0 text-left">
+              <div className="text-[10px] font-mono-code uppercase tracking-widest text-white/45 flex items-center gap-1.5">
+                <Sparkles className="w-3 h-3" style={{ color: primary }} />
+                <span>
+                  {phase === 'intro' ? 'INTRO' : 'INTERLUDE'} · VOCALS IN {fmtCountdown(secondsUntilNext)}
+                </span>
+              </div>
+              <div className="font-display text-lg font-bold text-white truncate mt-0.5">{song.title}</div>
+              <div className="text-xs text-white/50 truncate">{song.artist}</div>
+            </div>
+            {song.isFullTrack && secondsUntilNext > 3.5 && onJumpToTime && (
+              <button
+                type="button"
+                onClick={() => onJumpToTime(Math.max(0, upcomingLine.start - 0.8))}
+                className="px-3 py-1.5 rounded-xl text-[11px] font-semibold text-black shrink-0 cursor-pointer hover:brightness-110"
+                style={{ backgroundColor: primary }}
+              >
+                Skip Intro
+              </button>
+            )}
+          </div>
+
+          <div className="space-y-2.5 max-w-2xl">
+            <div className="text-[10px] font-mono-code uppercase tracking-[0.24em] text-white/35">
+              Incoming Lyric
+            </div>
+            <div
+              className="font-display text-2xl sm:text-4xl font-bold text-white/88 leading-snug"
+              style={{ textShadow: `0 0 28px ${primary}66` }}
+            >
+              {upcomingLine.text}
+            </div>
+            {upcomingLine2 && (
+              <div className="font-grotesk text-sm sm:text-lg text-white/32">{upcomingLine2.text}</div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* VERCI OPTICAL FISHEYE LENS */}
+      {currentLine && style === 'fisheye' && (
+        <FisheyeLyricsStage
+          currentLine={currentLine}
+          prevLine={prevLine}
+          nextLine={nextLine}
+          activeLineIdx={activeLineIdx}
+          activeWordIdx={activeWordIdx}
+          blueprint={blueprint}
+          visualIcons={visualIcons}
+          audioPulseRef={audioPulseRef}
+        />
+      )}
+
       {/* KINETIC SLAM: Shockwave Halo + Spring Slam + Chromatic Echo + Watermark */}
-      {style === 'kinetic' && (
+      {currentLine && style === 'kinetic' && (
         <div className="relative z-10 w-full max-w-5xl flex flex-col items-center text-center space-y-6">
           <div className="text-sm sm:text-lg font-grotesk uppercase tracking-[0.18em] text-white/25 min-h-[24px] transition-all duration-300">
             {prevLine?.text || ''}
@@ -147,10 +290,10 @@ export const LyricsStage: React.FC<LyricsStageProps> = ({
           {(() => {
             const safeIdx = Math.max(0, activeWordIdx);
             const word = currentLine.words[safeIdx]?.text || currentLine.text;
+            const icon = visualIcons ? getWordVisualIcon(word) : null;
             const impactKey = `${activeLineIdx}-${safeIdx}`;
             return (
               <div className="relative flex items-center justify-center py-4">
-                {/* Faint Monumental Echo Backdrop */}
                 <span
                   aria-hidden
                   className="absolute font-display text-6xl sm:text-8xl md:text-9xl font-black uppercase tracking-tighter opacity-[0.045] scale-125 pointer-events-none select-none blur-[1px]"
@@ -159,7 +302,6 @@ export const LyricsStage: React.FC<LyricsStageProps> = ({
                   {word}
                 </span>
 
-                {/* Radial Impact Shockwave Ring on Word Ignition */}
                 <div
                   key={`ring-${impactKey}`}
                   aria-hidden
@@ -170,7 +312,6 @@ export const LyricsStage: React.FC<LyricsStageProps> = ({
                   }}
                 />
 
-                {/* Chromatic Left & Right Echo */}
                 <span
                   aria-hidden
                   key={`echo-l-${impactKey}`}
@@ -188,22 +329,21 @@ export const LyricsStage: React.FC<LyricsStageProps> = ({
                   {word}
                 </span>
 
-                {/* Hero Word Spring Slam */}
                 <span
                   key={impactKey}
-                  className="relative font-display text-5xl sm:text-7xl md:text-8xl font-extrabold uppercase tracking-tight animate-aura-slam"
+                  className="relative font-display text-5xl sm:text-7xl md:text-8xl font-extrabold uppercase tracking-tight animate-aura-slam inline-flex items-center gap-3"
                   style={{
                     color: accent,
                     textShadow: `0 0 36px ${primary}, 0 0 80px ${primary}77`,
                   }}
                 >
-                  {word}
+                  <span>{word}</span>
+                  {icon && <span className="text-4xl sm:text-6xl">{icon}</span>}
                 </span>
               </div>
             );
           })()}
 
-          {/* Full line highlighted smoothly underneath */}
           <div className="flex flex-wrap items-center justify-center gap-x-2.5 gap-y-1 max-w-3xl">
             {currentLine.words.map((wd, idx) => {
               const isAct = idx === activeWordIdx;
@@ -232,7 +372,7 @@ export const LyricsStage: React.FC<LyricsStageProps> = ({
       )}
 
       {/* LIQUID GLASS APPLE LYRICS + FLOATING BIOLUMINESCENT AURORAS */}
-      {style === 'liquid' && (
+      {currentLine && style === 'liquid' && (
         <>
           {song.artworkUrl && (
             <div
@@ -246,7 +386,6 @@ export const LyricsStage: React.FC<LyricsStageProps> = ({
             />
           )}
 
-          {/* Moving Bioluminescent Aurora Spheres */}
           <div className="fixed inset-0 pointer-events-none z-0 overflow-hidden">
             <div
               className="absolute top-[18%] left-[18%] w-[36vw] h-[36vw] max-w-[440px] max-h-[440px] rounded-full blur-[110px] opacity-28 animate-aura-float"
@@ -270,11 +409,12 @@ export const LyricsStage: React.FC<LyricsStageProps> = ({
               {currentLine.words.map((wd, idx) => {
                 const isActive = idx === activeWordIdx;
                 const isSung = idx < activeWordIdx;
+                const icon = visualIcons ? getWordVisualIcon(wd.text) : null;
                 return (
                   <span
                     key={`${activeLineIdx}-${idx}`}
-                    className={`relative font-display text-3xl sm:text-5xl md:text-6xl font-bold transition-all duration-200 ease-apple ${
-                      isActive ? 'animate-aura-word-bloom px-2 rounded-2xl' : ''
+                    className={`relative inline-flex items-center gap-1.5 font-display text-3xl sm:text-5xl md:text-6xl font-bold transition-all duration-200 ease-apple -mx-1.5 px-1.5 rounded-2xl ${
+                      isActive ? 'animate-aura-word-bloom' : ''
                     }`}
                     style={{
                       color: isActive ? accent : isSung ? 'rgba(255,255,255,0.92)' : 'rgba(255,255,255,0.22)',
@@ -284,7 +424,8 @@ export const LyricsStage: React.FC<LyricsStageProps> = ({
                         : 'none',
                     }}
                   >
-                    {wd.text}
+                    <span>{wd.text}</span>
+                    {icon && isActive && <span className="text-2xl sm:text-3xl">{icon}</span>}
                   </span>
                 );
               })}
@@ -303,7 +444,7 @@ export const LyricsStage: React.FC<LyricsStageProps> = ({
       )}
 
       {/* EDITORIAL POETIC SERIF + GOLDEN SPOTLIGHT & PROGRESS HAIRLINE */}
-      {style === 'editorial' && (
+      {currentLine && style === 'editorial' && (
         <div className="relative z-10 w-full max-w-4xl flex flex-col items-center text-center space-y-7">
           <div className="text-[10px] font-mono-code uppercase tracking-[0.28em] text-white/30">
             {song.title} · {song.artist}
@@ -317,10 +458,11 @@ export const LyricsStage: React.FC<LyricsStageProps> = ({
             {currentLine.words.map((wd, idx) => {
               const isAct = idx === activeWordIdx;
               const isSung = idx < activeWordIdx;
+              const icon = visualIcons ? getWordVisualIcon(wd.text) : null;
               return (
                 <span
                   key={`${activeLineIdx}-${idx}`}
-                  className={`font-serif-editorial italic text-4xl sm:text-6xl font-semibold transition-all duration-200 ease-apple ${
+                  className={`inline-flex items-center gap-1.5 font-serif-editorial italic text-4xl sm:text-6xl font-semibold transition-all duration-200 ease-apple ${
                     isAct ? 'animate-aura-word-bloom' : ''
                   }`}
                   style={{
@@ -328,13 +470,13 @@ export const LyricsStage: React.FC<LyricsStageProps> = ({
                     textShadow: isAct ? `0 0 32px ${primary}, 0 0 64px ${primary}88` : 'none',
                   }}
                 >
-                  {wd.text}
+                  <span>{wd.text}</span>
+                  {icon && isAct && <span className="text-2xl not-italic">{icon}</span>}
                 </span>
               );
             })}
           </div>
 
-          {/* Ornamental Line Progress Hairline + Glowing Diamond */}
           <div className="relative w-52 h-[1px] bg-white/12">
             <div
               className="h-full transition-all duration-200 ease-apple relative"
@@ -358,7 +500,7 @@ export const LyricsStage: React.FC<LyricsStageProps> = ({
       )}
 
       {/* CODESTYLE PRO CYBER IDE STREAM */}
-      {style === 'codestyle' && (
+      {currentLine && style === 'codestyle' && (
         <div className="relative z-10 w-full max-w-3xl text-left font-mono-code rounded-2xl oled-surface p-5 sm:p-7 space-y-4">
           <div className="flex items-center justify-between border-b border-white/[0.08] pb-3 text-[11px]">
             <div className="flex items-center gap-2">
@@ -391,17 +533,19 @@ export const LyricsStage: React.FC<LyricsStageProps> = ({
               const isActive = idx === activeWordIdx;
               const isSung = idx < activeWordIdx;
               if (idx > activeWordIdx + 2) return null;
+              const icon = visualIcons ? getWordVisualIcon(wd.text) : null;
               return (
                 <span
                   key={`${activeLineIdx}-${idx}`}
-                  className={`transition-all duration-150 ${isActive ? 'animate-aura-word-bloom' : ''}`}
+                  className={`inline-flex items-center gap-1 transition-all duration-150 ${isActive ? 'animate-aura-word-bloom' : ''}`}
                   style={{
                     color: isActive ? accent : isSung ? primary : 'rgba(255,255,255,0.28)',
                     textShadow: isActive ? `0 0 20px ${primary}, 0 0 40px ${primary}66` : 'none',
                     borderBottom: isActive ? `2px solid ${primary}` : '2px solid transparent',
                   }}
                 >
-                  {wd.text}
+                  <span>{wd.text}</span>
+                  {icon && isActive && <span className="text-lg sm:text-2xl">{icon}</span>}
                 </span>
               );
             })}

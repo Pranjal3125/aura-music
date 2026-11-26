@@ -107,6 +107,7 @@ export const SpectrumHorizon: React.FC<SpectrumHorizonProps> = ({
   return (
     <canvas
       ref={canvasRef}
+      data-aura-spectrum-canvas="true"
       className="fixed bottom-1 left-1/2 -translate-x-1/2 pointer-events-none z-[12]"
       style={{ width: 'min(94vw, 900px)', height: '84px' }}
     />

@@ -1,6 +1,17 @@
-import { EqPresetId, VibePreset } from '../types';
+import type { EqPresetId, VibePreset } from '../types';
 
 export const VIBE_PRESETS: VibePreset[] = [
+  {
+    id: 'verci-lumn',
+    name: 'Verci × Lumn',
+    tag: 'REEL · APPLE UI',
+    description: 'Pitch OLED black, violet Lumn edge aura & animated iOS/macOS lyric cards',
+    palette: { primary: '#a855f7', secondary: '#0a84ff', accent: '#f5f3ff' },
+    lyricStyle: 'apple_ui',
+    edgeStyle: 'lumn_vivid',
+    particles: 'cosmos',
+    showSpectrum: false,
+  },
   {
     id: 'starboy-noir',
     name: 'Starboy Noir',
@@ -11,6 +22,17 @@ export const VIBE_PRESETS: VibePreset[] = [
     edgeStyle: 'lumn_vivid',
     particles: 'cosmos',
     showSpectrum: false,
+  },
+  {
+    id: 'neon-fisheye',
+    name: 'Optical Fisheye',
+    tag: 'VERCI LENS',
+    description: 'Chromatic wide-angle fisheye glass lens with violet prism rim',
+    palette: { primary: '#818cf8', secondary: '#c084fc', accent: '#ffffff' },
+    lyricStyle: 'fisheye',
+    edgeStyle: 'violet_prism',
+    particles: 'cosmos',
+    showSpectrum: true,
   },
   {
     id: 'cyber-samurai',
@@ -101,17 +123,6 @@ export const VIBE_PRESETS: VibePreset[] = [
     showSpectrum: false,
   },
   {
-    id: 'monochrome-leica',
-    name: 'Leica Noir',
-    tag: 'PURE MONOCHROME',
-    description: 'Silver & crisp white cinema minimalism on pure OLED black',
-    palette: { primary: '#f8fafc', secondary: '#94a3b8', accent: '#ffffff' },
-    lyricStyle: 'editorial',
-    edgeStyle: 'breathing_aura',
-    particles: 'none',
-    showSpectrum: false,
-  },
-  {
     id: 'hyperwarp-3d',
     name: 'Hyperwarp 3D',
     tag: 'WARP TUNNEL',
@@ -132,6 +143,17 @@ export const VIBE_PRESETS: VibePreset[] = [
     edgeStyle: 'lumn_vivid',
     particles: 'cosmos',
     showSpectrum: true,
+  },
+  {
+    id: 'monochrome-leica',
+    name: 'Leica Noir',
+    tag: 'PURE MONOCHROME',
+    description: 'Silver & crisp white cinema minimalism on pure OLED black',
+    palette: { primary: '#f8fafc', secondary: '#94a3b8', accent: '#ffffff' },
+    lyricStyle: 'editorial',
+    edgeStyle: 'breathing_aura',
+    particles: 'none',
+    showSpectrum: false,
   },
 ];
 
