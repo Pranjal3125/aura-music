@@ -160,7 +160,7 @@ export const LyricsTimelineDrawer: React.FC<LyricsTimelineDrawerProps> = ({
                   <button
                     type="button"
                     onClick={() => onSyncLineHere(line.start)}
-                    className="opacity-0 group-hover:opacity-100 px-2 py-1 rounded-lg bg-white/[0.08] hover:bg-white/[0.18] text-[10px] font-mono-code text-white/80 flex items-center gap-1 shrink-0 transition-opacity cursor-pointer"
+                    className="opacity-70 group-hover:opacity-100 px-2 py-1 rounded-lg bg-white/[0.08] hover:bg-white/[0.18] text-[10px] font-mono-code text-white/85 flex items-center gap-1 shrink-0 transition-opacity cursor-pointer"
                     title="Click right when singer sings this line to lock perfect sync!"
                   >
                     <Crosshair className="w-3 h-3" style={{ color: accentColor }} /> Sync

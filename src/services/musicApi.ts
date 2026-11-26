@@ -172,13 +172,13 @@ async function fetchItunesSongs(query: string): Promise<SongItem[]> {
 
 const FEATURED_QUERIES = [
   { query: 'Kesariya Arijit Singh', preferFull: true },
-  { query: 'The Weeknd Starboy', preferFull: false },
   { query: 'Tum Hi Ho Arijit Singh', preferFull: true },
-  { query: 'Raataan Lambiyan', preferFull: true },
-  { query: 'Husn Anuv Jain', preferFull: true },
+  { query: 'Chaleya', preferFull: true },
   { query: 'Apna Bana Le Arijit', preferFull: true },
-  { query: 'Kun Faya Kun', preferFull: true },
-  { query: 'The Weeknd Blinding Lights', preferFull: false },
+  { query: 'Raataan Lambiyan', preferFull: true },
+  { query: 'Agar Tum Saath Ho', preferFull: true },
+  { query: 'Sajni Arijit Singh', preferFull: true },
+  { query: 'Husn Anuv Jain', preferFull: true },
 ];
 
 export async function loadFeaturedSongs(): Promise<SongItem[]> {
@@ -205,12 +205,12 @@ export async function loadFeaturedSongs(): Promise<SongItem[]> {
 export function buildTimedLine(start: number, end: number, text: string): LyricLine {
   const rawWords = text.trim().split(/\s+/).filter(Boolean);
   const wordCount = rawWords.length;
-  // Cap active singing sweep realistically so a short 4-word line doesn't drag over long pauses!
-  const naturalCap = Math.max(2.2, wordCount * 0.68);
+  // Tight natural vocal cadence so words sweep right with the singer instead of lagging
+  const naturalCap = Math.max(1.75, wordCount * 0.56);
   const sweepEnd = Math.min(end, start + naturalCap);
-  const totalDur = Math.max(0.45, sweepEnd - start);
+  const totalDur = Math.max(0.4, sweepEnd - start);
 
-  const weights = rawWords.map((w) => Math.max(1.1, w.replace(/[^a-zA-Z0-9]/g, '').length * 0.6 + 0.9));
+  const weights = rawWords.map((w) => Math.max(0.95, w.replace(/[^a-zA-Z0-9]/g, '').length * 0.52 + 0.85));
   const sum = weights.reduce((a, b) => a + b, 0);
 
   let cursor = start;
@@ -225,9 +225,8 @@ export function buildTimedLine(start: number, end: number, text: string): LyricL
 }
 
 /**
- * IMPORTANT LRC ACCURACY FIX:
- * Preserves blank LRC timestamp rows (`[00:13.40] `) as explicit END markers for the preceding lyric line,
- * instead of discarding them first and over-stretching the line across instrumental gaps!
+ * Parses LRC timestamps with exact blank-line end boundaries, note cleanup (♪ / ♫),
+ * and same-timestamp duplicate/translation filtering.
  */
 function parseLrc(lrc: string, fallbackDuration = 220): LyricLine[] {
   const events: Array<{ time: number; text: string }> = [];
@@ -239,8 +238,15 @@ function parseLrc(lrc: string, fallbackDuration = 220): LyricLine[] {
     const mins = parseInt(m[1], 10);
     const secs = parseInt(m[2], 10);
     const frac = parseInt((m[3] || '0').padEnd(3, '0'), 10) / 1000;
-    const text = m[4].replace(/^♪+$|^\.\.\.$/, '').trim();
-    events.push({ time: mins * 60 + secs + frac, text });
+    const cleaned = m[4].replace(/^[\s♪♫•·.*…-]+$/g, '').trim();
+    const time = mins * 60 + secs + frac;
+
+    // Skip bilingual/duplicate translation rows sharing the exact same timestamp (<0.3s)
+    const prev = events[events.length - 1];
+    if (cleaned && prev && prev.text && Math.abs(time - prev.time) < 0.3) {
+      continue;
+    }
+    events.push({ time, text: cleaned });
   }
 
   events.sort((a, b) => a.time - b.time);
@@ -248,10 +254,10 @@ function parseLrc(lrc: string, fallbackDuration = 220): LyricLine[] {
   const lines: LyricLine[] = [];
   for (let i = 0; i < events.length; i++) {
     const ev = events[i];
-    if (!ev.text) continue; // blank line acts strictly as end-boundary for previous event!
+    if (!ev.text) continue;
 
     const nextAnyTime = i < events.length - 1 ? events[i + 1].time : Math.min(fallbackDuration, ev.time + 5);
-    const end = Math.max(ev.time + 0.75, Math.min(nextAnyTime - 0.04, ev.time + 7.5));
+    const end = Math.max(ev.time + 0.7, Math.min(nextAnyTime - 0.03, ev.time + 7.2));
     lines.push(buildTimedLine(ev.time, end, ev.text));
   }
 
@@ -267,31 +273,37 @@ interface LrcLibItem {
 }
 
 /**
- * Fetches & ranks LRCLIB synced lyrics by:
- * 1) Exact duration match (critical for tight sync!),
- * 2) Latin/Romanized script readability (renders best across Constellation & Kinetic worlds),
- * 3) Phrase timestamp granularity!
+ * Fetches & ranks LRCLIB synced lyrics across title + singer queries:
+ * 1) Exact duration match (critical for tight sync),
+ * 2) Higher phrase granularity (e.g. 59-line phrase LRC beats 36-line coarse LRC),
+ * 3) Latin/Romanized script readability!
  */
 export async function fetchSyncedLyricsForSong(song: SongItem): Promise<LyricLine[]> {
   const cleanTitle = song.title.replace(/\(.*?\)|\[.*?\]/g, '').trim();
-  const primaryArtist = song.artist.split(/[,&]/)[0].trim();
-  const queries = [`${primaryArtist} ${cleanTitle}`, cleanTitle];
+  const artists = song.artist.split(/[,&]/).map((a) => a.trim()).filter(Boolean);
+  const queries = Array.from(
+    new Set([
+      cleanTitle,
+      artists[1] ? `${artists[1]} ${cleanTitle}` : '',
+      artists[0] ? `${artists[0]} ${cleanTitle}` : '',
+    ].filter(Boolean))
+  );
 
   const candidates: LrcLibItem[] = [];
 
-  for (const q of queries) {
-    try {
-      const res = await fetch(`https://lrclib.net/api/search?q=${encodeURIComponent(q)}`);
-      if (!res.ok) continue;
-      const items = (await res.json()) as LrcLibItem[];
-      if (Array.isArray(items)) candidates.push(...items);
-      if (candidates.some((c) => c.syncedLyrics && Math.abs((c.duration || 0) - song.duration) <= 3)) {
-        break;
+  const fetchedLists = await Promise.all(
+    queries.map(async (q) => {
+      try {
+        const res = await fetch(`https://lrclib.net/api/search?q=${encodeURIComponent(q)}`);
+        if (!res.ok) return [];
+        const items = (await res.json()) as LrcLibItem[];
+        return Array.isArray(items) ? items : [];
+      } catch {
+        return [];
       }
-    } catch {
-      // ignore network error
-    }
-  }
+    })
+  );
+  fetchedLists.forEach((list) => candidates.push(...list));
 
   const synced = candidates.filter((r) => r.syncedLyrics && r.syncedLyrics.trim().length > 25);
   if (synced.length > 0) {
@@ -299,21 +311,23 @@ export async function fetchSyncedLyricsForSong(song: SongItem): Promise<LyricLin
       let score = 0;
       const durDiff = song.isFullTrack && song.duration > 40 ? Math.abs((item.duration || 0) - song.duration) : 15;
       if (song.isFullTrack && song.duration > 40) {
-        if (durDiff <= 2) score += 140;
-        else if (durDiff <= 6) score += 95;
-        else if (durDiff <= 15) score += 45;
-        else score -= durDiff;
+        if (durDiff <= 2) score += 160;
+        else if (durDiff <= 5) score += 110;
+        else if (durDiff <= 12) score += 50;
+        else score -= durDiff * 1.5;
       }
 
       const lrc = item.syncedLyrics || '';
       const hasLatinWords = /[a-zA-Z]{4,}/.test(lrc.replace(/\[[^\]]+\]/g, ''));
-      if (hasLatinWords) score += 40;
+      if (hasLatinWords) score += 45;
 
-      const lineCount = lrc.split('\n').filter((l) => l.trim().length > 10).length;
-      if (lineCount >= 28 && lineCount <= 140) score += 25;
+      // Continuous bonus for granular phrase-by-phrase timestamp density!
+      const validLines = lrc.split('\n').filter((l) => l.replace(/\[[^\]]+\]/g, '').trim().length > 1).length;
+      score += Math.min(75, validLines * 1.15);
 
       const tNorm = (item.trackName || '').toLowerCase();
-      if (tNorm.includes(cleanTitle.toLowerCase())) score += 25;
+      if (tNorm === cleanTitle.toLowerCase()) score += 35;
+      else if (tNorm.includes(cleanTitle.toLowerCase())) score += 20;
 
       return { item, score };
     });

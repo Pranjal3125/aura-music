@@ -39,7 +39,6 @@ import {
 } from './types';
 import { EQ_PRESETS, VIBE_PRESETS } from './data/presets';
 import {
-  detectChorusStartTime,
   extractPaletteFromArtwork,
   fetchSyncedLyricsForSong,
   loadFeaturedSongs,
@@ -72,6 +71,25 @@ function hexToRgb(hex: string): [number, number, number] {
 function rgbToHex(rgb: [number, number, number]): string {
   const clamp = (v: number) => Math.max(0, Math.min(255, Math.round(v)));
   return '#' + [clamp(rgb[0]), clamp(rgb[1]), clamp(rgb[2])].map((x) => x.toString(16).padStart(2, '0')).join('');
+}
+
+function loadSavedOffset(songId: string): number | null {
+  try {
+    const map = JSON.parse(localStorage.getItem('aura_lyric_offsets_v1') || '{}') as Record<string, number>;
+    return typeof map[songId] === 'number' ? map[songId] : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveOffset(songId: string, offset: number): void {
+  try {
+    const map = JSON.parse(localStorage.getItem('aura_lyric_offsets_v1') || '{}') as Record<string, number>;
+    map[songId] = offset;
+    localStorage.setItem('aura_lyric_offsets_v1', JSON.stringify(map));
+  } catch {
+    // ignore
+  }
 }
 
 const DEFAULT_BLUEPRINT: VibeBlueprint = presetToBlueprint(VIBE_PRESETS[0]);
@@ -263,10 +281,13 @@ const AuraStage: React.FC = () => {
       setLyrics(fetchedLyrics);
       setLyricsLoading(false);
 
-      // For 30s Apple Previews, align onto the most repeated chorus hook timestamp!
-      if (!song.isFullTrack && fetchedLyrics.length > 6) {
-        const chorusStart = detectChorusStartTime(fetchedLyrics);
-        setLyricOffset(chorusStart);
+      const saved = loadSavedOffset(song.id);
+      if (saved !== null) {
+        setLyricOffset(saved);
+      } else if (!song.isFullTrack && fetchedLyrics.length > 0) {
+        setLyricOffset(0);
+        setLyricsDrawerOpen(true);
+        showToast('30s Preview — hover the sung line & click Sync to lock!');
       }
 
       const autoBp = directSongAutonomously({
@@ -450,28 +471,26 @@ const AuraStage: React.FC = () => {
       }
 
       if (s.lyrics.length > 0) {
-        const lyricTime = curSec + s.lyricOffset;
+        // +0.14s visual anticipation keeps star & filament landing cleanly on vocal syllable!
+        const lyricTime = curSec + s.lyricOffset + 0.14;
         let lineIdx = -1;
-        for (let i = 0; i < s.lyrics.length; i++) {
-          if (lyricTime >= s.lyrics[i].start - 0.1 && lyricTime <= s.lyrics[i].end + 0.22) {
-            lineIdx = i;
-            break;
-          }
-        }
-        if (lineIdx === -1) {
-          for (let i = s.lyrics.length - 1; i >= 0; i--) {
-            if (lyricTime >= s.lyrics[i].start) {
-              if (lyricTime - s.lyrics[i].end < 2.0) lineIdx = i;
-              break;
+        for (let i = s.lyrics.length - 1; i >= 0; i--) {
+          if (lyricTime >= s.lyrics[i].start) {
+            if (lyricTime <= s.lyrics[i].end + 0.45) {
+              lineIdx = i;
             }
+            break;
           }
         }
 
         let wordIdx = -1;
         if (lineIdx >= 0) {
           const words = s.lyrics[lineIdx].words;
-          for (let j = 0; j < words.length; j++) {
-            if (lyricTime >= words[j].start - 0.04) wordIdx = j;
+          for (let j = words.length - 1; j >= 0; j--) {
+            if (lyricTime >= words[j].start) {
+              wordIdx = j;
+              break;
+            }
           }
           if (wordIdx === -1 && words.length > 0) wordIdx = 0;
         }
@@ -682,6 +701,20 @@ const AuraStage: React.FC = () => {
         setPureCinema((v) => !v);
       } else if (e.key === 'l' || e.key === 'L') {
         setLyricsDrawerOpen((v) => !v);
+      } else if (e.key === '[' && activeSong) {
+        setLyricOffset((v) => {
+          const next = Math.round((v - 0.5) * 10) / 10;
+          saveOffset(activeSong.id, next);
+          showToast(`Sync: ${next >= 0 ? `+${next}s` : `${next}s`}`);
+          return next;
+        });
+      } else if (e.key === ']' && activeSong) {
+        setLyricOffset((v) => {
+          const next = Math.round((v + 0.5) * 10) / 10;
+          saveOffset(activeSong.id, next);
+          showToast(`Sync: ${next >= 0 ? `+${next}s` : `${next}s`}`);
+          return next;
+        });
       } else if (e.key === 'Escape' && pureCinema) {
         setPureCinema(false);
       }
@@ -1194,14 +1227,26 @@ const AuraStage: React.FC = () => {
             onSeekToLine={(sec) => {
               audioRef.current?.seek(sec);
               setLyricOffset(0);
+              saveOffset(activeSong.id, 0);
             }}
             onSyncLineHere={(lineStartSec) => {
               const cur = audioRef.current?.getCurrentTime() || 0;
-              setLyricOffset(Math.round((lineStartSec - cur) * 10) / 10);
-              showToast('Synced lyrics to exact vocal!');
+              const next = Math.round((lineStartSec - cur) * 10) / 10;
+              setLyricOffset(next);
+              saveOffset(activeSong.id, next);
+              showToast(`Locked sync (${next >= 0 ? `+${next}s` : `${next}s`})!`);
             }}
-            onAdjustOffset={(d) => setLyricOffset((v) => Math.round((v + d) * 10) / 10)}
-            onResetOffset={() => setLyricOffset(0)}
+            onAdjustOffset={(d) =>
+              setLyricOffset((v) => {
+                const next = Math.round((v + d) * 10) / 10;
+                saveOffset(activeSong.id, next);
+                return next;
+              })
+            }
+            onResetOffset={() => {
+              setLyricOffset(0);
+              saveOffset(activeSong.id, 0);
+            }}
             onPlayFromQueue={(s) => void playSong(s, queue)}
           />
 
@@ -1320,22 +1365,34 @@ const AuraStage: React.FC = () => {
                       <span className="hidden sm:inline text-[9px] font-mono-code px-1.5 py-0.5 rounded bg-white/[0.07] text-white/55">
                         {activeSong.isFullTrack ? 'FULL' : '30s'}
                       </span>
-                      {lyrics.length > 0 && !activeSong.isFullTrack && (
+                      {lyrics.length > 0 && (
                         <div className="hidden md:flex items-center gap-0.5 ml-1 bg-white/[0.06] rounded-md px-1 py-0.5 text-[9px] font-mono-code text-white/70">
                           <button
                             type="button"
-                            onClick={() => setLyricOffset((v) => Math.round((v - 2) * 10) / 10)}
+                            onClick={() =>
+                              setLyricOffset((v) => {
+                                const next = Math.round((v - 0.5) * 10) / 10;
+                                saveOffset(activeSong.id, next);
+                                return next;
+                              })
+                            }
                             className="hover:text-white cursor-pointer"
-                            title="Delay lyrics -2s"
+                            title="Delay lyrics -0.5s ([)"
                           >
                             <Minus className="w-2.5 h-2.5" />
                           </button>
                           <span className="px-1">{lyricOffset >= 0 ? `+${lyricOffset}s` : `${lyricOffset}s`}</span>
                           <button
                             type="button"
-                            onClick={() => setLyricOffset((v) => Math.round((v + 2) * 10) / 10)}
+                            onClick={() =>
+                              setLyricOffset((v) => {
+                                const next = Math.round((v + 0.5) * 10) / 10;
+                                saveOffset(activeSong.id, next);
+                                return next;
+                              })
+                            }
                             className="hover:text-white cursor-pointer"
-                            title="Advance lyrics +2s"
+                            title="Advance lyrics +0.5s (])"
                           >
                             <Plus className="w-2.5 h-2.5" />
                           </button>

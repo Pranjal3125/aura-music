@@ -303,8 +303,9 @@ export const CosmosLyricsCanvas: React.FC<CosmosLyricsCanvasProps> = ({
           camVy = 0;
           camInitialized = true;
         } else {
-          const stiffness = 13.5;
-          const damping = 7.4;
+          // Snappy critically-damped spring: settles cleanly right on beat (~160ms) without dragging behind vocals
+          const stiffness = 28;
+          const damping = 10.6;
           const ax = (lookX - camX) * stiffness - camVx * damping;
           const ay = (lookY - camY) * stiffness - camVy * damping;
           camVx += ax * dt;
@@ -408,8 +409,8 @@ export const CosmosLyricsCanvas: React.FC<CosmosLyricsCanvasProps> = ({
             n.scale = Math.max(0, n.scale + n.scaleVel * dt);
 
             const targetEdge = i <= activeGlobal ? 1 : 0;
-            if (targetEdge > n.edgeProg) n.edgeProg = Math.min(1, n.edgeProg + dt * 2.8);
-            else if (i > activeGlobal + 1) n.edgeProg *= Math.exp(-4 * dt);
+            if (targetEdge > n.edgeProg) n.edgeProg = Math.min(1, n.edgeProg + dt * 5.8);
+            else if (i > activeGlobal + 1) n.edgeProg *= Math.exp(-5 * dt);
 
             const targetVis = isAct ? 1 : isSameLine ? (isPast ? 0.74 : 0.3) : prox * (isPast ? 0.4 : 0.14);
             n.visAlpha += (targetVis - n.visAlpha) * alphaEase;
