@@ -1,0 +1,1 @@
+{"root":["./src/app.tsx","./src/main.tsx","./src/types.ts","./src/components/ambientparticles.tsx","./src/components/companionscreen.tsx","./src/components/lyricsstage.tsx","./src/components/searchbar.tsx","./src/engine/lightaudioengine.ts","./src/engine/vibebrain.ts","./src/services/musicapi.ts"],"version":"5.8.3"}
