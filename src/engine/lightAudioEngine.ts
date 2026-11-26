@@ -29,6 +29,7 @@ export class LightAudioEngine {
   private freqData = new Uint8Array(128);
   private spectrumOut = new Float32Array(32);
   private corsConnected = false;
+  private corsBlockedOrigins = new Set<string>();
   private liveMode: 'none' | 'tab' | 'mic' = 'none';
 
   private smoothBass = 0.08;
@@ -165,11 +166,36 @@ export class LightAudioEngine {
     this.liveMode = 'none';
   }
 
+  private getOrigin(url: string): string | null {
+    try {
+      return new URL(url).origin;
+    } catch {
+      return null;
+    }
+  }
+
   public async loadAndPlay(url: string): Promise<void> {
     const seq = ++this.loadSeq;
     this.stopLiveCapture();
     this.primaryAudio.pause();
     this.fallbackAudio.pause();
+
+    const origin = this.getOrigin(url);
+    if (origin && this.corsBlockedOrigins.has(origin)) {
+      this.primaryAudio.removeAttribute('src');
+      this.usingFallback = true;
+      this.fallbackAudio.volume = this.volumeState;
+      this.fallbackAudio.src = url;
+      this.fallbackAudio.currentTime = 0;
+      try {
+        await this.fallbackAudio.play();
+      } catch (fbErr) {
+        if (seq !== this.loadSeq) return;
+        if (fbErr instanceof DOMException && fbErr.name === 'AbortError') return;
+        throw fbErr;
+      }
+      return;
+    }
 
     this.usingFallback = false;
     this.ensureContext();
@@ -200,7 +226,14 @@ export class LightAudioEngine {
       this.fallbackAudio.volume = this.volumeState;
       this.fallbackAudio.src = url;
       this.fallbackAudio.currentTime = 0;
-      await this.fallbackAudio.play();
+      try {
+        await this.fallbackAudio.play();
+        if (origin) this.corsBlockedOrigins.add(origin);
+      } catch (fbErr) {
+        if (seq !== this.loadSeq) return;
+        if (fbErr instanceof DOMException && fbErr.name === 'AbortError') return;
+        throw fbErr;
+      }
     }
   }
 

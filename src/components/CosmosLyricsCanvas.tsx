@@ -1196,20 +1196,21 @@ export const CosmosLyricsCanvas: React.FC<CosmosLyricsCanvasProps> = ({
           ctx.stroke();
 
           // Context lines
+          const maxHeroW = Math.max(180, boxW * 0.9);
           ctx.textAlign = 'center';
           ctx.textBaseline = 'middle';
           ctx.font = '500 13px "JetBrains Mono", monospace';
           if (prevL) {
             ctx.fillStyle = rgba(curA, 0.25);
-            ctx.fillText(`0x01 // ${prevL.text}`, cxScreen, ty - 24);
+            ctx.fillText(`0x01 // ${prevL.text}`, cxScreen, ty - 24, boxW);
           }
           if (nextL) {
             ctx.fillStyle = rgba(curS, 0.28);
-            ctx.fillText(`NEXT >> ${nextL.text}`, cxScreen, by + 28);
+            ctx.fillText(`NEXT >> ${nextL.text}`, cxScreen, by + 28, boxW);
           }
 
           if (heroWord) {
-            const heroPx = Math.min(84, Math.max(40, w * 0.068));
+            const heroPx = Math.min(84, Math.max(38, w * 0.068));
             const activeGlitch = Math.max(glitchSpike, pulse.beat * 0.65);
             const splitX = 2.5 + activeGlitch * 10;
 
@@ -1224,13 +1225,13 @@ export const CosmosLyricsCanvas: React.FC<CosmosLyricsCanvasProps> = ({
 
             // Chromatic RGB split silhouettes
             ctx.fillStyle = rgba(curP, 0.62);
-            ctx.fillText(heroWord, cxScreen - splitX, cyScreen + 1.5);
+            ctx.fillText(heroWord, cxScreen - splitX, cyScreen + 1.5, maxHeroW);
             ctx.fillStyle = rgba(curS, 0.62);
-            ctx.fillText(heroWord, cxScreen + splitX, cyScreen - 1.5);
+            ctx.fillText(heroWord, cxScreen + splitX, cyScreen - 1.5, maxHeroW);
 
             // Core crisp text + cyber slice tear during high beat/transition
             ctx.fillStyle = rgba(curA, 0.98);
-            ctx.fillText(heroWord, cxScreen, cyScreen);
+            ctx.fillText(heroWord, cxScreen, cyScreen, maxHeroW);
 
             if (activeGlitch > 0.28) {
               const sliceH = heroPx * 0.28;
@@ -1241,7 +1242,7 @@ export const CosmosLyricsCanvas: React.FC<CosmosLyricsCanvasProps> = ({
               ctx.rect(0, sliceY, w, sliceH);
               ctx.clip();
               ctx.fillStyle = rgba(curS, 0.9);
-              ctx.fillText(heroWord, cxScreen + tearShift, cyScreen);
+              ctx.fillText(heroWord, cxScreen + tearShift, cyScreen, maxHeroW);
               ctx.restore();
             }
           }

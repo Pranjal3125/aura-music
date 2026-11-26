@@ -298,6 +298,26 @@ test('LyricsStage renders all 12 lyric visual worlds and manual search fallback 
   assert.ok(!outroCanvasHtml.includes('No synced lyrics matched automatically'));
   assert.ok(outroCanvasHtml.includes('data-aura-stage-canvas="true"'));
 
+  // Cyber (glitch) MUST keep canvas mounted even while lyrics are loading during track rollover!
+  const cyberLoadingHtml = renderToStaticMarkup(
+    <LyricsStage
+      song={sampleSong}
+      lyrics={[]}
+      lyricsLoading={true}
+      activeLineIdx={-1}
+      activeWordIdx={-1}
+      upcomingLineIdx={-1}
+      secondsUntilNext={0}
+      phase="none"
+      blueprint={{ ...presetToBlueprint(VIBE_PRESETS[0]), lyricStyle: 'glitch' }}
+      isPlaying={true}
+      visualIcons={true}
+      audioPulseRef={pulseRef}
+    />
+  );
+  assert.ok(cyberLoadingHtml.includes('data-aura-stage-canvas="true"'), 'Cyber canvas must stay mounted during rollover');
+  assert.ok(cyberLoadingHtml.includes('Syncing lyrics...'));
+
   const outroAppleHtml = renderToStaticMarkup(
     <LyricsStage
       song={sampleSong}

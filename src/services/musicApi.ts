@@ -137,27 +137,69 @@ export function scoreTrackRelevance(song: SongItem, query: string): number {
   const qTokens = qNorm.split(' ').filter((w) => w.length >= 2);
   const tNorm = normalizeForMatch(cleanTrackTitle(song.title));
   const rawTNorm = normalizeForMatch(song.title);
-  const aNorm = normalizeForMatch(song.artist);
+  const featMatch = song.title.match(/(?:\(|\[|\b)(?:feat|ft)\.?\s+([^)\]]+)/i);
+  const aNorm = normalizeForMatch(`${song.artist} ${featMatch?.[1] || ''}`);
+  const albNorm = normalizeForMatch(song.album);
   let score = 0;
 
   if (tNorm === qNorm || rawTNorm === qNorm) score += 140;
-  else if (`${tNorm} ${aNorm}`.includes(qNorm)) score += 90;
+  else if (`${tNorm} ${aNorm}`.includes(qNorm)) score += 95;
   else if (tNorm.startsWith(qNorm)) score += 80;
 
+  let titleTokenHits = 0;
+  let artistTokenHits = 0;
+  let albumTokenHits = 0;
   for (const tok of qTokens) {
-    if (tNorm.includes(tok)) score += 28;
-    else if (aNorm.includes(tok)) score += 22;
+    const inTitle = tNorm.includes(tok);
+    const inArtist = aNorm.includes(tok);
+    const inAlbum = albNorm.includes(tok);
+    if (inTitle) {
+      titleTokenHits++;
+      score += 28;
+    }
+    if (inArtist) {
+      artistTokenHits++;
+      score += inTitle ? 18 : 30;
+    }
+    if (inAlbum) {
+      albumTokenHits++;
+    }
+  }
+
+  // Big synergy bonus when both title and real artist match query tokens
+  if (titleTokenHits >= 1 && artistTokenHits >= 1) {
+    score += 65;
+  }
+
+  // Penalize keyword-stuffed knockoff titles whose credited artist & album have zero query overlap
+  if (
+    qTokens.length >= 2 &&
+    tNorm !== qNorm &&
+    rawTNorm !== qNorm &&
+    artistTokenHits === 0 &&
+    albumTokenHits === 0 &&
+    titleTokenHits >= 2
+  ) {
+    score -= 160;
   }
 
   if (!allowJunkForQuery(query) && JUNK_PATTERN.test(`${song.title} ${song.album}`)) {
     score -= 160;
   }
-  if (!/\b(remix|cover|lofi|reprise|unplugged)\b/i.test(query) && /\b(remix|cover|reprise|unplugged)\b/i.test(song.title)) {
-    score -= 35;
+  if (
+    !/\b(remix|cover|lofi|lo-fi|reprise|unplugged|slowed|reverb|sped\s*up|8d|mashup)\b/i.test(query) &&
+    /\b(remix|cover|reprise|unplugged|lo-?fi|slowed|reverb|sped\s*up|8d|mashup)\b/i.test(song.title)
+  ) {
+    score -= 45;
   }
 
   if (song.isFullTrack && song.source === 'saavn') score += 32;
   else if (song.isFullTrack && song.source === 'audius') score += 12;
+
+  const realDur = song.fullDuration || song.duration;
+  if (realDur > 0 && realDur < 110 && !/\b(intro|interlude|skit)\b/i.test(query)) {
+    score -= 25;
+  }
 
   if (song.playCount && song.playCount > 100000) {
     score += Math.min(25, Math.log10(song.playCount) * 3);
@@ -167,35 +209,71 @@ export function scoreTrackRelevance(song: SongItem, query: string): number {
 }
 
 /**
- * Resilient multi-mirror + CORS-fallback JSON fetcher for JioSaavn APIs.
- * Caches the winning route in-session so subsequent queries stay fast.
+ * Optional self-hosted JioSaavn API support.
+ * Zero default calls to dead/rate-limited public mirrors or CORS proxies so initial
+ * page load produces zero Chrome console/CORS errors.
  */
-type SaavnStrategy = (path: string) => string;
-
-const SAAVN_DIRECT_STRATEGIES: SaavnStrategy[] = [
-  (path) => `https://saavn.sumit.co/api${path}`,
-  (path) => `https://saavn.dev/api${path}`,
-  (path) => `https://jiosaavn-api-privatecvc2.vercel.app${path}`,
-  (path) => `https://jiosaavn-api-2-harsh-patel.vercel.app/api${path}`,
-];
-
-const SAAVN_PROXY_STRATEGIES: SaavnStrategy[] = [
-  (path) => `https://api.allorigins.win/raw?url=${encodeURIComponent(`https://saavn.sumit.co/api${path}`)}`,
-  (path) => `https://api.cors.lol/?url=${encodeURIComponent(`https://saavn.sumit.co/api${path}`)}`,
-  (path) => `https://proxy.cors.dev/https://saavn.sumit.co/api${path}`,
-  (path) => `https://corsproxy.io/?url=${encodeURIComponent(`https://saavn.sumit.co/api${path}`)}`,
-  (path) => `https://corsproxy.io/?url=${encodeURIComponent(`https://saavn.dev/api${path}`)}`,
-  (path) => `https://api.allorigins.win/raw?url=${encodeURIComponent(`https://jiosaavn-api-2-harsh-patel.vercel.app/api${path}`)}`,
-];
-
-const ALL_SAAVN_STRATEGIES: SaavnStrategy[] = [
-  ...SAAVN_DIRECT_STRATEGIES,
-  ...SAAVN_PROXY_STRATEGIES,
-];
-
-let workingSaavnStrategyIdx: number | null = null;
+export const CUSTOM_SAAVN_STORAGE_KEY = 'aura_saavn_api_url';
+let customSaavnOverride: string | null | undefined = undefined;
 let saavnCooldownUntil = 0;
-let saavnProbePromise: Promise<number | null> | null = null;
+
+function normalizeSaavnBaseUrl(raw: string | null | undefined): string | null {
+  if (!raw || typeof raw !== 'string') return null;
+  const trimmed = raw.trim().replace(/\/+$/, '');
+  if (!trimmed) return null;
+  try {
+    const parsed = new URL(trimmed);
+    const isLocal = parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1';
+    if (parsed.protocol !== 'https:' && !(parsed.protocol === 'http:' && isLocal)) {
+      return null;
+    }
+    return parsed.toString().replace(/\/+$/, '');
+  } catch {
+    return null;
+  }
+}
+
+export function getCustomSaavnBaseUrl(): string | null {
+  if (customSaavnOverride !== undefined) return customSaavnOverride;
+
+  if (typeof window !== 'undefined') {
+    try {
+      const param = new URLSearchParams(window.location.search).get('saavn_api');
+      const normalizedParam = normalizeSaavnBaseUrl(param);
+      if (normalizedParam) return normalizedParam;
+    } catch {
+      // ignore
+    }
+    try {
+      const stored = window.localStorage?.getItem(CUSTOM_SAAVN_STORAGE_KEY);
+      const normalizedStored = normalizeSaavnBaseUrl(stored);
+      if (normalizedStored) return normalizedStored;
+    } catch {
+      // ignore
+    }
+  }
+  return null;
+}
+
+export function setCustomSaavnBaseUrl(url: string | null): string | null {
+  const normalized = normalizeSaavnBaseUrl(url);
+  customSaavnOverride = normalized;
+  saavnCooldownUntil = 0;
+  if (typeof window !== 'undefined' && window.localStorage) {
+    try {
+      if (normalized) window.localStorage.setItem(CUSTOM_SAAVN_STORAGE_KEY, normalized);
+      else window.localStorage.removeItem(CUSTOM_SAAVN_STORAGE_KEY);
+    } catch {
+      // ignore
+    }
+  }
+  return normalized;
+}
+
+export function resetSaavnClientStateForTests(): void {
+  customSaavnOverride = undefined;
+  saavnCooldownUntil = 0;
+}
 
 function isValidSaavnPayload(json: unknown, requireNonEmpty = false): boolean {
   if (!json || typeof json !== 'object') return false;
@@ -212,82 +290,26 @@ function isValidSaavnPayload(json: unknown, requireNonEmpty = false): boolean {
   return requireNonEmpty ? list.length > 0 : true;
 }
 
-async function tryStrategy<T>(
-  idx: number,
-  path: string,
-  timeoutMs: number,
-  requireNonEmpty = false
-): Promise<{ idx: number; data: T }> {
-  const url = ALL_SAAVN_STRATEGIES[idx](path);
-  const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const json = (await res.json()) as T;
-  if (!isValidSaavnPayload(json, requireNonEmpty)) throw new Error('Invalid Saavn payload');
-  return { idx, data: json };
-}
-
-async function resolveWorkingSaavnStrategy(): Promise<number | null> {
-  if (workingSaavnStrategyIdx !== null) return workingSaavnStrategyIdx;
-  if (Date.now() < saavnCooldownUntil) return null;
-  if (saavnProbePromise) return saavnProbePromise;
-
-  saavnProbePromise = (async () => {
-    const probePath = '/search/songs?query=Kesariya&limit=2';
-    try {
-      const directHit = await Promise.any(
-        SAAVN_DIRECT_STRATEGIES.map((_, i) =>
-          tryStrategy<Record<string, unknown>>(i, probePath, 2600, true)
-        )
-      );
-      workingSaavnStrategyIdx = directHit.idx;
-      return directHit.idx;
-    } catch {
-      // Direct mirrors blocked (CORS/down); race CORS-proxied routes
-    }
-
-    try {
-      const offset = SAAVN_DIRECT_STRATEGIES.length;
-      const proxyHit = await Promise.any(
-        SAAVN_PROXY_STRATEGIES.map((_, i) =>
-          tryStrategy<Record<string, unknown>>(offset + i, probePath, 3400, true)
-        )
-      );
-      workingSaavnStrategyIdx = proxyHit.idx;
-      return proxyHit.idx;
-    } catch {
-      saavnCooldownUntil = Date.now() + 60_000;
-      return null;
-    } finally {
-      saavnProbePromise = null;
-    }
-  })();
-
-  return saavnProbePromise;
-}
-
 async function fetchSaavnJson<T>(path: string): Promise<T | null> {
-  const strategyIdx = await resolveWorkingSaavnStrategy();
-  if (strategyIdx === null) return null;
+  const baseUrl = getCustomSaavnBaseUrl();
+  if (!baseUrl) return null;
+  if (Date.now() < saavnCooldownUntil) return null;
 
   try {
-    const hit = await tryStrategy<T>(strategyIdx, path, 4200, false);
-    return hit.data;
-  } catch {
-    workingSaavnStrategyIdx = null;
-    try {
-      const fallbackHit = await Promise.any(
-        ALL_SAAVN_STRATEGIES.map((_, i) =>
-          i === strategyIdx
-            ? Promise.reject(new Error('skip'))
-            : tryStrategy<T>(i, path, 3400, false)
-        )
-      );
-      workingSaavnStrategyIdx = fallbackHit.idx;
-      return fallbackHit.data;
-    } catch {
+    const res = await fetch(`${baseUrl}${path}`, { signal: AbortSignal.timeout(4200) });
+    if (!res.ok) {
       saavnCooldownUntil = Date.now() + 60_000;
       return null;
     }
+    const json = (await res.json()) as T;
+    if (!isValidSaavnPayload(json, false)) {
+      saavnCooldownUntil = Date.now() + 60_000;
+      return null;
+    }
+    return json;
+  } catch {
+    saavnCooldownUntil = Date.now() + 60_000;
+    return null;
   }
 }
 
@@ -441,10 +463,15 @@ async function fetchAudiusTrending(): Promise<SongItem[]> {
   }
 }
 
-export async function fetchItunesSongs(query: string): Promise<SongItem[]> {
+export async function fetchItunesSongs(
+  query: string,
+  options?: { limit?: number; country?: string }
+): Promise<SongItem[]> {
   try {
+    const limit = options?.limit ?? 15;
+    const countryParam = options?.country ? `&country=${encodeURIComponent(options.country)}` : '';
     const res = await fetch(
-      `https://itunes.apple.com/search?term=${encodeURIComponent(query)}&entity=song&limit=12`,
+      `https://itunes.apple.com/search?term=${encodeURIComponent(query)}&entity=song&limit=${limit}${countryParam}`,
       { signal: AbortSignal.timeout(5000) }
     );
     if (!res.ok) return [];
@@ -475,34 +502,56 @@ export async function fetchItunesSongs(query: string): Promise<SongItem[]> {
         year: r.releaseDate ? r.releaseDate.slice(0, 4) : undefined,
       });
     }
-    return out.slice(0, 8);
+    return out.slice(0, limit);
   } catch {
     return [];
   }
 }
 
 /**
- * Searches REAL songs across JioSaavn (320kbps FULL), Audius (CORS-native FULL), & Apple iTunes (Global catalog + HD covers).
+ * Searches REAL songs across Audius (CORS-native FULL), Apple iTunes (Global catalog + HD covers), & optional self-hosted JioSaavn.
  */
 export async function searchRealSongs(query: string): Promise<SongItem[]> {
   const q = query.trim();
   if (!q) return [];
 
-  const [saavnResults, itunesResults, audiusResults] = await Promise.all([
+  const isIndianQuery =
+    /\b(hindi|bollywood|indian|indie|punjabi|arijit|anuv|pritam|mithoon|sachin|jigar|anirudh|jubin|diljit|ap dhillon|atif|shreya|kesariya|tum hi ho|apna bana|chaleya|raataan|husn|baarishein|sufi|desi)\b/i.test(
+      q
+    );
+
+  const [saavnResults, itunesResults, itunesRegional, audiusResults] = await Promise.all([
     fetchSaavnSongs(q),
-    fetchItunesSongs(q),
+    fetchItunesSongs(q, { limit: 15 }),
+    isIndianQuery ? fetchItunesSongs(q, { limit: 12, country: 'IN' }) : Promise.resolve([]),
     fetchAudiusSongs(q),
   ]);
 
-  const combined = [...saavnResults, ...itunesResults, ...audiusResults];
+  const combined = [...saavnResults, ...itunesResults, ...itunesRegional, ...audiusResults];
   const byKey = new Map<string, { song: SongItem; score: number }>();
 
-  for (const s of combined) {
-    const key = makeSongKey(s.title, s.artist);
-    const sc = scoreTrackRelevance(s, q);
-    const prev = byKey.get(key);
-    if (!prev || sc > prev.score || (sc === prev.score && s.isFullTrack && !prev.song.isFullTrack)) {
-      byKey.set(key, { song: s, score: sc });
+  const absorb = (items: SongItem[]) => {
+    for (const s of items) {
+      const key = makeSongKey(s.title, s.artist);
+      const sc = scoreTrackRelevance(s, q);
+      const prev = byKey.get(key);
+      if (!prev || sc > prev.score || (sc === prev.score && s.isFullTrack && !prev.song.isFullTrack)) {
+        byKey.set(key, { song: s, score: sc });
+      }
+    }
+  };
+
+  absorb(combined);
+
+  // If global search missed or returned only weak/knockoff hits, probe regional IN catalog once
+  if (!isIndianQuery) {
+    let bestScore = -Infinity;
+    byKey.forEach((v) => {
+      if (v.score > bestScore) bestScore = v.score;
+    });
+    if (byKey.size === 0 || bestScore < 95) {
+      const fallbackIn = await fetchItunesSongs(q, { limit: 10, country: 'IN' });
+      absorb(fallbackIn);
     }
   }
 
@@ -512,42 +561,106 @@ export async function searchRealSongs(query: string): Promise<SongItem[]> {
     .slice(0, 14);
 }
 
-const FEATURED_QUERIES = [
-  { query: 'No Lie Sean Paul Dua Lipa', preferFull: true },
-  { query: 'Starboy The Weeknd', preferFull: true },
-  { query: 'Kesariya Arijit Singh', preferFull: true },
-  { query: 'Tum Hi Ho Arijit Singh', preferFull: true },
-  { query: 'Apna Bana Le Arijit Singh', preferFull: true },
-  { query: 'Chaleya Arijit Singh', preferFull: true },
-  { query: 'Raataan Lambiyan Jubin Nautiyal', preferFull: true },
-  { query: 'Husn Anuv Jain', preferFull: true },
+interface FeaturedTrackSpec {
+  query: string;
+  expectedTitle: string;
+  expectedArtists: string[];
+  country?: string;
+  fallbacks?: Array<Omit<FeaturedTrackSpec, 'fallbacks'>>;
+}
+
+const FEATURED_QUERIES: FeaturedTrackSpec[] = [
+  { query: 'No Lie Sean Paul Dua Lipa', expectedTitle: 'No Lie', expectedArtists: ['Sean Paul', 'Dua Lipa'] },
+  { query: 'Starboy The Weeknd', expectedTitle: 'Starboy', expectedArtists: ['The Weeknd'] },
+  { query: 'Kesariya Arijit Singh', expectedTitle: 'Kesariya', expectedArtists: ['Pritam', 'Arijit Singh'], country: 'IN' },
+  { query: 'Tum Hi Ho Arijit Singh', expectedTitle: 'Tum Hi Ho', expectedArtists: ['Mithoon', 'Arijit Singh'], country: 'IN' },
+  { query: 'Apna Bana Le Arijit Singh', expectedTitle: 'Apna Bana Le', expectedArtists: ['Sachin-Jigar', 'Arijit Singh'], country: 'IN' },
+  { query: 'Chaleya Arijit Singh', expectedTitle: 'Chaleya', expectedArtists: ['Anirudh', 'Arijit Singh', 'Shilpa Rao'], country: 'IN' },
+  { query: 'Raataan Lambiyan Jubin Nautiyal', expectedTitle: 'Raataan Lambiyan', expectedArtists: ['Tanishk Bagchi', 'Jubin Nautiyal', 'Asees Kaur'], country: 'IN' },
+  {
+    query: 'Husn Anuv Jain',
+    expectedTitle: 'Husn',
+    expectedArtists: ['Anuv Jain'],
+    country: 'IN',
+    fallbacks: [
+      { query: 'Jo Tum Mere Ho Anuv Jain', expectedTitle: 'Jo Tum Mere Ho', expectedArtists: ['Anuv Jain'], country: 'IN' },
+      { query: 'Baarishein Anuv Jain', expectedTitle: 'Baarishein', expectedArtists: ['Anuv Jain'], country: 'IN' },
+      { query: 'Alag Aasmaan Anuv Jain', expectedTitle: 'Alag Aasmaan', expectedArtists: ['Anuv Jain'], country: 'IN' },
+      { query: 'Agar Tum Saath Ho Arijit Singh', expectedTitle: 'Agar Tum Saath Ho', expectedArtists: ['Alka Yagnik', 'Arijit Singh'], country: 'IN' },
+    ],
+  },
 ];
+
+const FEATURED_KNOCKOFF_MODIFIERS =
+  /\b(remix|cover|reprise|unplugged|karaoke|instrumental|lo-?fi|slowed|reverb|sped\s*up|nightcore|8d|acoustic|live|mashup|tribute|ringtone|dj\s+mix)\b/i;
+
+export function matchesFeaturedSpec(
+  song: SongItem,
+  spec: Pick<FeaturedTrackSpec, 'expectedTitle' | 'expectedArtists'>
+): boolean {
+  if (JUNK_PATTERN.test(`${song.title} ${song.album}`)) return false;
+  if (FEATURED_KNOCKOFF_MODIFIERS.test(song.title)) return false;
+  if (song.fullDuration !== undefined && song.fullDuration > 0 && song.fullDuration < 110) return false;
+
+  const cleanT = normalizeForMatch(cleanTrackTitle(song.title));
+  const rawT = normalizeForMatch(song.title);
+  const expT = normalizeForMatch(spec.expectedTitle);
+  const titleMatches =
+    cleanT === expT ||
+    rawT === expT ||
+    cleanT.startsWith(`${expT} `) ||
+    rawT.startsWith(`${expT} `);
+  if (!titleMatches) return false;
+
+  const featMatch = song.title.match(/(?:\(|\[|\b)(?:feat|ft)\.?\s+([^)\]]+)/i);
+  const artistNorm = normalizeForMatch(`${song.artist} ${featMatch?.[1] || ''}`);
+  return spec.expectedArtists.some((art) => artistNorm.includes(normalizeForMatch(art)));
+}
+
+async function resolveSingleFeaturedTrack(
+  spec: Omit<FeaturedTrackSpec, 'fallbacks'>
+): Promise<SongItem | null> {
+  const saavn = await fetchSaavnSongs(spec.query);
+  const verifiedSaavn = saavn.filter((s) => matchesFeaturedSpec(s, spec));
+  if (verifiedSaavn.length > 0) {
+    verifiedSaavn.sort((a, b) => scoreTrackRelevance(b, spec.query) - scoreTrackRelevance(a, spec.query));
+    return verifiedSaavn[0];
+  }
+
+  // Prefer regional storefront first when specified (halves iTunes API calls & avoids US knockoffs)
+  if (spec.country) {
+    const itunesRegional = await fetchItunesSongs(spec.query, { limit: 18, country: spec.country });
+    const verifiedRegional = itunesRegional.filter((s) => matchesFeaturedSpec(s, spec));
+    if (verifiedRegional.length > 0) {
+      verifiedRegional.sort((a, b) => scoreTrackRelevance(b, spec.query) - scoreTrackRelevance(a, spec.query));
+      return verifiedRegional[0];
+    }
+  }
+
+  const itunesDefault = await fetchItunesSongs(spec.query, { limit: 18 });
+  const verifiedDefault = itunesDefault.filter((s) => matchesFeaturedSpec(s, spec));
+  if (verifiedDefault.length > 0) {
+    verifiedDefault.sort((a, b) => scoreTrackRelevance(b, spec.query) - scoreTrackRelevance(a, spec.query));
+    return verifiedDefault[0];
+  }
+
+  return null;
+}
 
 export async function loadFeaturedSongs(): Promise<SongItem[]> {
   const results = await Promise.all(
     FEATURED_QUERIES.map(async (item) => {
       try {
-        let bestSaavn: SongItem | null = null;
-        if (item.preferFull) {
-          const saavn = await fetchSaavnSongs(item.query);
-          if (saavn.length > 0) {
-            bestSaavn = saavn[0];
-            if (scoreTrackRelevance(bestSaavn, item.query) >= 120) {
-              return bestSaavn;
-            }
+        const primary = await resolveSingleFeaturedTrack(item);
+        if (primary) return primary;
+
+        if (item.fallbacks) {
+          for (const fb of item.fallbacks) {
+            const hit = await resolveSingleFeaturedTrack(fb);
+            if (hit) return hit;
           }
         }
-        const itunes = await fetchItunesSongs(item.query);
-        if (itunes.length > 0) {
-          itunes.sort((a, b) => scoreTrackRelevance(b, item.query) - scoreTrackRelevance(a, item.query));
-          if (bestSaavn && scoreTrackRelevance(bestSaavn, item.query) >= scoreTrackRelevance(itunes[0], item.query)) {
-            return bestSaavn;
-          }
-          return itunes[0];
-        }
-        if (bestSaavn) return bestSaavn;
-        const audius = await fetchAudiusSongs(item.query);
-        return audius[0] || null;
+        return null;
       } catch {
         return null;
       }
@@ -788,27 +901,20 @@ export async function fetchSyncedLyricsDetailed(
         : 0;
 
   const candidates: LrcLibItem[] = [];
-  const requests: Array<Promise<LrcLibItem[]>> = [];
-
-  if (!customQuery && baseTitle && primaryArtist) {
-    const artistCandidates = secondaryArtist && secondaryArtist !== primaryArtist
-      ? [primaryArtist, secondaryArtist]
-      : [primaryArtist];
-
-    for (const art of artistCandidates) {
-      const getParams = new URLSearchParams({
-        track_name: baseTitle,
-        artist_name: art,
-      });
-      if (refDur > 0) getParams.set('duration', String(Math.round(refDur)));
-      requests.push(
-        fetch(`https://lrclib.net/api/get?${getParams.toString()}`, { signal: AbortSignal.timeout(4800) })
-          .then(async (res) => (res.ok ? [(await res.json()) as LrcLibItem] : []))
-          .catch(() => [])
-      );
+  const seenLrc = new Set<string>();
+  const absorbLrcList = (list: LrcLibItem[]) => {
+    for (const item of list) {
+      const key = `${item.id || ''}|${item.trackName || ''}|${item.artistName || ''}|${item.duration || ''}`;
+      if (seenLrc.has(key)) continue;
+      seenLrc.add(key);
+      candidates.push(item);
     }
+  };
 
-    requests.push(
+  // Query LRCLIB /api/search first (always returns HTTP 200 -> zero Chrome 404 console spam)
+  const searchRequests: Array<Promise<LrcLibItem[]>> = [];
+  if (!customQuery && baseTitle && primaryArtist) {
+    searchRequests.push(
       fetch(
         `https://lrclib.net/api/search?track_name=${encodeURIComponent(baseTitle)}&artist_name=${encodeURIComponent(primaryArtist)}`,
         { signal: AbortSignal.timeout(4800) }
@@ -835,7 +941,7 @@ export async function fetchSyncedLyricsDetailed(
   );
 
   for (const q of searchQueries) {
-    requests.push(
+    searchRequests.push(
       fetch(`https://lrclib.net/api/search?q=${encodeURIComponent(q)}`, {
         signal: AbortSignal.timeout(4800),
       })
@@ -848,65 +954,85 @@ export async function fetchSyncedLyricsDetailed(
     );
   }
 
-  const results = await Promise.all(requests);
-  const seenLrc = new Set<string>();
-  for (const list of results) {
-    for (const item of list) {
-      const key = `${item.id || ''}|${item.trackName || ''}|${item.artistName || ''}|${item.duration || ''}`;
-      if (seenLrc.has(key)) continue;
-      seenLrc.add(key);
-      candidates.push(item);
-    }
+  const searchResults = await Promise.all(searchRequests);
+  for (const list of searchResults) {
+    absorbLrcList(list);
   }
 
   const minAcceptableScore = customQuery || artists.length === 0 ? 0 : 30;
+  const pickBestLrcMatch = (): LyricsFetchResult | null => {
+    const synced = candidates.filter((r) => r.syncedLyrics && r.syncedLyrics.trim().length > 25);
+    if (synced.length > 0) {
+      const scored = synced
+        .map((item) => ({
+          item,
+          score: scoreLrcCandidate(item, song, baseTitle, customQuery ? [] : artists),
+        }))
+        .sort((a, b) => b.score - a.score);
 
-  const synced = candidates.filter((r) => r.syncedLyrics && r.syncedLyrics.trim().length > 25);
-  if (synced.length > 0) {
-    const scored = synced
-      .map((item) => ({
-        item,
-        score: scoreLrcCandidate(item, song, baseTitle, customQuery ? [] : artists),
-      }))
-      .sort((a, b) => b.score - a.score);
-
-    const best = scored[0];
-    if (best && best.score >= minAcceptableScore) {
-      const parsed = parseLrc(best.item.syncedLyrics!, refDur || best.item.duration || 220);
-      if (parsed.length > 0) {
-        return {
-          lines: parsed,
-          matchSource: 'lrclib_synced',
-          matchedTrack: best.item.trackName,
-          matchedArtist: best.item.artistName,
-        };
+      const best = scored[0];
+      if (best && best.score >= minAcceptableScore) {
+        const parsed = parseLrc(best.item.syncedLyrics!, refDur || best.item.duration || 220);
+        if (parsed.length > 0) {
+          return {
+            lines: parsed,
+            matchSource: 'lrclib_synced',
+            matchedTrack: best.item.trackName,
+            matchedArtist: best.item.artistName,
+          };
+        }
       }
     }
-  }
 
-  const plainCandidates = candidates.filter((r) => r.plainLyrics && r.plainLyrics.trim().length > 25);
-  if (plainCandidates.length > 0) {
-    const scoredPlain = plainCandidates
-      .map((item) => ({
-        item,
-        score: scoreLrcCandidate(item, song, baseTitle, customQuery ? [] : artists),
-      }))
-      .sort((a, b) => b.score - a.score);
+    const plainCandidates = candidates.filter((r) => r.plainLyrics && r.plainLyrics.trim().length > 25);
+    if (plainCandidates.length > 0) {
+      const scoredPlain = plainCandidates
+        .map((item) => ({
+          item,
+          score: scoreLrcCandidate(item, song, baseTitle, customQuery ? [] : artists),
+        }))
+        .sort((a, b) => b.score - a.score);
 
-    const bestPlain = scoredPlain[0];
-    if (bestPlain && bestPlain.score >= minAcceptableScore) {
-      const lines = buildPlainTimedLyrics(
-        bestPlain.item.plainLyrics!,
-        refDur || bestPlain.item.duration || (song.isFullTrack ? song.duration || 210 : 210)
-      );
-      if (lines.length > 0) {
-        return {
-          lines,
-          matchSource: 'lrclib_plain',
-          matchedTrack: bestPlain.item.trackName,
-          matchedArtist: bestPlain.item.artistName,
-        };
+      const bestPlain = scoredPlain[0];
+      if (bestPlain && bestPlain.score >= minAcceptableScore) {
+        const lines = buildPlainTimedLyrics(
+          bestPlain.item.plainLyrics!,
+          refDur || bestPlain.item.duration || (song.isFullTrack ? song.duration || 210 : 210)
+        );
+        if (lines.length > 0) {
+          return {
+            lines,
+            matchSource: 'lrclib_plain',
+            matchedTrack: bestPlain.item.trackName,
+            matchedArtist: bestPlain.item.artistName,
+          };
+        }
       }
+    }
+    return null;
+  };
+
+  const searchHit = pickBestLrcMatch();
+  if (searchHit) return searchHit;
+
+  // Fallback to exact /api/get only when /api/search yielded zero acceptable candidates
+  if (!customQuery && baseTitle && primaryArtist) {
+    const getParams = new URLSearchParams({
+      track_name: baseTitle,
+      artist_name: primaryArtist,
+    });
+    if (refDur > 0) getParams.set('duration', String(Math.round(refDur)));
+    try {
+      const getRes = await fetch(`https://lrclib.net/api/get?${getParams.toString()}`, {
+        signal: AbortSignal.timeout(4800),
+      });
+      if (getRes.ok) {
+        absorbLrcList([(await getRes.json()) as LrcLibItem]);
+        const getHit = pickBestLrcMatch();
+        if (getHit) return getHit;
+      }
+    } catch {
+      // ignore
     }
   }
 
@@ -939,8 +1065,8 @@ export async function fetchSyncedLyricsForSong(song: SongItem): Promise<LyricLin
 }
 
 /**
- * Finds the chorus/hook entry timestamp in LRC so 30s previews immediately display
- * live lyrics synced near the hook instead of sitting silent at 0:00!
+ * Finds the primary chorus/hook entry timestamp in LRC so 30s previews land
+ * cleanly on the first chorus (~0:30–1:35) instead of late outro refrains!
  */
 export function detectChorusStartTime(lyrics: LyricLine[], fullDuration?: number): number {
   if (lyrics.length === 0) return 0;
@@ -949,30 +1075,54 @@ export function detectChorusStartTime(lyrics: LyricLine[], fullDuration?: number
   const lastStart = lyrics[lyrics.length - 1].start;
   const estTotal = Math.max(fullDuration || 0, lastStart + 10, 120);
   const maxAllowed = Math.max(30, estTotal - 26);
+  const maxPrimaryWindow = Math.min(maxAllowed, Math.max(70, Math.round(estTotal * 0.46)));
+  const idealPreviewPos = estTotal * 0.28;
 
-  const counts = new Map<string, { count: number; firstHookStart: number }>();
+  const groups = new Map<string, { occurrences: number[]; wordCount: number }>();
   for (const line of lyrics) {
-    const norm = line.text.toLowerCase().replace(/[^a-z0-9\s]/g, '').trim();
+    const norm = line.text
+      .toLowerCase()
+      .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
     const wordCount = norm.split(/\s+/).filter(Boolean).length;
     if (norm.length < 5 || (wordCount < 2 && norm.length < 7)) continue;
-    const existing = counts.get(norm);
+    const existing = groups.get(norm);
     if (existing) {
-      existing.count++;
-      if (existing.firstHookStart < 18 && line.start >= 18 && line.start <= maxAllowed) {
-        existing.firstHookStart = line.start;
-      }
+      existing.occurrences.push(line.start);
     } else {
-      counts.set(norm, { count: 1, firstHookStart: line.start });
+      groups.set(norm, { occurrences: [line.start], wordCount });
     }
   }
 
-  let bestCount = 1;
+  let bestScore = -Infinity;
   let bestStart = -1;
 
-  counts.forEach((v) => {
-    if (v.count > bestCount && v.firstHookStart >= 18 && v.firstHookStart <= maxAllowed) {
-      bestCount = v.count;
-      bestStart = v.firstHookStart;
+  groups.forEach((group) => {
+    if (group.occurrences.length < 2) return;
+    const sortedTimes = [...group.occurrences].sort((a, b) => a - b);
+    const earliestPrimary = sortedTimes.find((t) => t >= 18 && t <= maxPrimaryWindow);
+    if (earliestPrimary === undefined) return;
+
+    // Count distinct song sections (>= 18s apart) so rapid back-to-back outro loops don't outrank the chorus
+    let distinctSections = 1;
+    let lastSecTime = sortedTimes[0];
+    for (let i = 1; i < sortedTimes.length; i++) {
+      if (sortedTimes[i] - lastSecTime >= 18) {
+        distinctSections++;
+        lastSecTime = sortedTimes[i];
+      }
+    }
+
+    const sectionScore = distinctSections * 34 + Math.min(18, (sortedTimes.length - distinctSections) * 4);
+    const distFromIdeal = Math.abs(earliestPrimary - idealPreviewPos);
+    const proximityBonus = Math.max(0, 32 - distFromIdeal * 0.5);
+    const richness = Math.min(16, group.wordCount * 3);
+    const totalScore = sectionScore + proximityBonus + richness;
+
+    if (totalScore > bestScore) {
+      bestScore = totalScore;
+      bestStart = earliestPrimary;
     }
   });
 
@@ -980,12 +1130,12 @@ export function detectChorusStartTime(lyrics: LyricLine[], fullDuration?: number
     return Math.round(bestStart);
   }
 
-  // Fallback: Apple iTunes 30s previews typically start near 28–34% of the track
-  const target = estTotal * 0.3;
-  let closest = lyrics[Math.min(lyrics.length - 1, Math.floor(lyrics.length * 0.28))];
+  // Fallback: Apple iTunes 30s previews typically start near 26–32% of the track
+  const target = estTotal * 0.28;
+  let closest = lyrics[Math.min(lyrics.length - 1, Math.floor(lyrics.length * 0.26))];
   let minDiff = Infinity;
   for (const line of lyrics) {
-    if (line.start > maxAllowed) continue;
+    if (line.start > maxPrimaryWindow) continue;
     const d = Math.abs(line.start - target);
     if (d < minDiff) {
       minDiff = d;
@@ -1143,6 +1293,7 @@ export async function fetchInfiniteRadioSongs(
   const randomArtistB = shuffledArtists[1] || 'Arijit Singh';
 
   const pool: SongItem[] = [];
+  const hasCustomSaavn = Boolean(getCustomSaavnBaseUrl());
 
   if (seedSong.source === 'audius') {
     const [byArtist, byGenre, trending] = await Promise.all([
@@ -1151,7 +1302,7 @@ export async function fetchInfiniteRadioSongs(
       fetchAudiusTrending(),
     ]);
     pool.push(...byArtist, ...byGenre, ...trending);
-  } else {
+  } else if (hasCustomSaavn) {
     const [byArtistSaavn, byPlaylistSaavn] = await Promise.all([
       singer && !/unknown|local|live/i.test(singer) ? fetchSaavnSongs(singer) : Promise.resolve([]),
       fetchSaavnPlaylistSongs(randomPlaylistQ),
@@ -1172,9 +1323,9 @@ export async function fetchInfiniteRadioSongs(
     }
   };
 
-  absorbPool(pool);
+  if (pool.length > 0) absorbPool(pool);
 
-  // If primary source yielded < 4 unplayed tracks (either CORS-blocked or already played), expand across iTunes & Audius
+  // Expand across CORS-native iTunes & Audius immediately when primary yielded < 4 tracks
   if (fresh.length < 4) {
     const [byArtistItunes, byRandomA, byRandomB, trendingAudius] = await Promise.all([
       singer && !/unknown|local|live/i.test(singer) ? fetchItunesSongs(singer) : Promise.resolve([]),
@@ -1207,15 +1358,23 @@ export async function launchRadioStation(stationQuery: string): Promise<SongItem
     if (out.length > 0) return out;
   }
 
-  const [plSongs, searchSongs] = await Promise.all([
-    fetchSaavnPlaylistSongs(stationQuery),
-    fetchSaavnSongs(stationQuery),
-  ]);
+  let pool: SongItem[] = [];
+  if (getCustomSaavnBaseUrl()) {
+    const [plSongs, searchSongs] = await Promise.all([
+      fetchSaavnPlaylistSongs(stationQuery),
+      fetchSaavnSongs(stationQuery),
+    ]);
+    pool = [...searchSongs, ...plSongs];
+  }
 
-  let pool = [...searchSongs, ...plSongs];
   if (pool.length < 4) {
+    const country = /\b(hindi|bollywood|indian|indie|punjabi|arijit|anuv|pritam|diljit|ap dhillon)\b/i.test(
+      stationQuery
+    )
+      ? 'IN'
+      : undefined;
     const [itunesFallback, audiusFallback] = await Promise.all([
-      fetchItunesSongs(stationQuery),
+      fetchItunesSongs(stationQuery, { limit: 16, country }),
       fetchAudiusSongs(stationQuery),
     ]);
     pool = [...pool, ...itunesFallback, ...audiusFallback];

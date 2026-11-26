@@ -32,14 +32,25 @@ export const SearchBar: React.FC<SearchBarProps> = ({
   const [results, setResults] = useState<SongItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [open, setOpen] = useState(false);
+  const [focused, setFocused] = useState(false);
   const [highlightIdx, setHighlightIdx] = useState(-1);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const lastHandledNonceRef = useRef<number>(-1);
+  const allowAutoOpenRef = useRef<boolean>(false);
 
   useEffect(() => {
-    const qVal = typeof externalQuery === 'string' ? externalQuery : externalQuery?.query;
-    if (qVal) {
-      setQuery(qVal);
+    if (!externalQuery) return;
+    if (typeof externalQuery === 'object') {
+      if (!externalQuery.query || externalQuery.nonce === lastHandledNonceRef.current) return;
+      lastHandledNonceRef.current = externalQuery.nonce;
+      allowAutoOpenRef.current = true;
+      setQuery(externalQuery.query);
+      setOpen(true);
+      inputRef.current?.focus();
+    } else if (externalQuery) {
+      allowAutoOpenRef.current = true;
+      setQuery(externalQuery);
       setOpen(true);
       inputRef.current?.focus();
     }
@@ -54,6 +65,7 @@ export const SearchBar: React.FC<SearchBarProps> = ({
       const tag = (e.target as HTMLElement | null)?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA') {
         if (e.key === 'Escape') {
+          allowAutoOpenRef.current = false;
           setOpen(false);
           inputRef.current?.blur();
         }
@@ -61,6 +73,7 @@ export const SearchBar: React.FC<SearchBarProps> = ({
       }
       if (e.key === '/') {
         e.preventDefault();
+        allowAutoOpenRef.current = true;
         inputRef.current?.focus();
         setOpen(true);
       }
@@ -72,6 +85,7 @@ export const SearchBar: React.FC<SearchBarProps> = ({
   useEffect(() => {
     const onDown = (e: MouseEvent) => {
       if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        allowAutoOpenRef.current = false;
         setOpen(false);
       }
     };
@@ -96,7 +110,9 @@ export const SearchBar: React.FC<SearchBarProps> = ({
         setResults(found);
         setLoading(false);
         setHighlightIdx(-1);
-        setOpen(true);
+        if (allowAutoOpenRef.current) {
+          setOpen(true);
+        }
       }
     }, 260);
 
@@ -116,6 +132,7 @@ export const SearchBar: React.FC<SearchBarProps> = ({
       setHighlightIdx((i) => (i <= 0 ? results.length - 1 : i - 1));
     } else if (e.key === 'Enter' && highlightIdx >= 0 && results[highlightIdx]) {
       e.preventDefault();
+      allowAutoOpenRef.current = false;
       onSelectSong(results[highlightIdx], results);
       setOpen(false);
       inputRef.current?.blur();
@@ -123,7 +140,10 @@ export const SearchBar: React.FC<SearchBarProps> = ({
   };
 
   return (
-    <div ref={containerRef} className={`relative z-[80] ${compact ? 'w-[min(64vw,430px)]' : 'w-[min(92vw,600px)]'}`}>
+    <div
+      ref={containerRef}
+      className={`relative ${open || focused ? 'z-[80]' : 'z-10'} ${compact ? 'w-[min(64vw,430px)]' : 'w-[min(92vw,600px)]'}`}
+    >
       <div
         className={`oled-pill rounded-full flex items-center gap-2.5 transition-all ${
           compact ? 'px-4 py-2' : 'px-5 py-3.5'
@@ -148,10 +168,16 @@ export const SearchBar: React.FC<SearchBarProps> = ({
           type="text"
           value={query}
           onFocus={() => {
+            setFocused(true);
+            allowAutoOpenRef.current = true;
             if (results.length > 0) setOpen(true);
           }}
+          onBlur={() => setFocused(false)}
           onKeyDown={handleKeyDown}
-          onChange={(e) => setQuery(e.target.value)}
+          onChange={(e) => {
+            allowAutoOpenRef.current = true;
+            setQuery(e.target.value);
+          }}
           placeholder={compact ? 'Search song... (Press /)' : 'Search any song or artist (e.g. No Lie, Starboy, Tum Hi Ho)...'}
           className={`flex-1 min-w-0 bg-transparent text-white placeholder:text-white/40 outline-none ${
             compact ? 'text-xs sm:text-sm' : 'text-sm sm:text-base'
@@ -162,6 +188,7 @@ export const SearchBar: React.FC<SearchBarProps> = ({
           <button
             type="button"
             onClick={() => {
+              allowAutoOpenRef.current = false;
               setQuery('');
               setResults([]);
               setOpen(false);
@@ -184,6 +211,7 @@ export const SearchBar: React.FC<SearchBarProps> = ({
             onChange={(e) => {
               const f = e.target.files?.[0];
               if (f) {
+                allowAutoOpenRef.current = false;
                 onUploadLocalFile(f);
                 setOpen(false);
               }
@@ -210,6 +238,7 @@ export const SearchBar: React.FC<SearchBarProps> = ({
                   <button
                     type="button"
                     onClick={() => {
+                      allowAutoOpenRef.current = false;
                       onSelectSong(song, results);
                       setOpen(false);
                       inputRef.current?.blur();

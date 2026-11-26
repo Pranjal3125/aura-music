@@ -8,11 +8,15 @@ import {
   fetchInfiniteRadioSongs,
   fetchSyncedLyricsDetailed,
   launchRadioStation,
+  loadFeaturedSongs,
   makeSongKey,
+  matchesFeaturedSpec,
   parseLrc,
+  resetSaavnClientStateForTests,
   scoreLrcCandidate,
   scoreTrackRelevance,
   searchRealSongs,
+  setCustomSaavnBaseUrl,
 } from '../src/services/musicApi.ts';
 import { computeLyricCursor, getWordVisualIcon } from '../src/services/lyricSync.ts';
 import { loadUserSettings, PREFS_COOKIE_NAME, sanitizeSettings, saveUserSettings } from '../src/services/settingsStorage.ts';
@@ -117,6 +121,42 @@ test('detectChorusStartTime locates repeated hook or ~30% midpoint', () => {
     { start: 85, end: 89, text: 'No lie', words: [] },
   ];
   assert.equal(detectChorusStartTime(shortHook, 190), 32);
+
+  // Kesariya-style track (4:28 = 268s): late outro refrain repeating 4x at 216s must NOT beat primary chorus at 54s!
+  const kesariyaStyle: LyricLine[] = [
+    { start: 14, end: 19, text: 'Mujhko itna bataye koi', words: [] },
+    { start: 22, end: 27, text: 'Kaise tujhse dil na lagaye koi', words: [] },
+    { start: 54, end: 60, text: 'Kesariya tera ishq hai piya', words: [] },
+    { start: 61, end: 66, text: 'Rang jaaun jo main haath lagaaun', words: [] },
+    { start: 132, end: 138, text: 'Kesariya tera ishq hai piya', words: [] },
+    { start: 216, end: 221, text: 'Chanda bhi deewana hai tera', words: [] },
+    { start: 222, end: 227, text: 'Chanda bhi deewana hai tera', words: [] },
+    { start: 228, end: 233, text: 'Chanda bhi deewana hai tera', words: [] },
+    { start: 234, end: 239, text: 'Chanda bhi deewana hai tera', words: [] },
+  ];
+  assert.equal(detectChorusStartTime(kesariyaStyle, 268), 54);
+  assert.ok(detectChorusStartTime(nonRepeating, 120) <= 75);
+
+  // Back-to-back outro loop + bridge hook at 135s (outside primary chorus window) must NOT beat 54s
+  const bridgeAndOutro: LyricLine[] = [
+    { start: 14, end: 19, text: 'Mujhko itna bataye koi', words: [] },
+    { start: 54, end: 60, text: 'Kesariya tera ishq hai piya', words: [] },
+    { start: 132, end: 138, text: 'Kesariya tera ishq hai piya', words: [] },
+    { start: 135, end: 140, text: 'Chanda bhi deewana hai tera', words: [] },
+    { start: 216, end: 221, text: 'Chanda bhi deewana hai tera', words: [] },
+    { start: 222, end: 227, text: 'Chanda bhi deewana hai tera', words: [] },
+    { start: 228, end: 233, text: 'Chanda bhi deewana hai tera', words: [] },
+  ];
+  assert.equal(detectChorusStartTime(bridgeAndOutro, 268), 54);
+
+  // Non-ASCII (Devanagari) lyrics must also resolve primary repeated chorus properly
+  const devanagariLines: LyricLine[] = [
+    { start: 12, end: 16, text: 'मुझको इतना बताये कोई', words: [] },
+    { start: 54, end: 60, text: 'केसरिया तेरा इश्क़ है पिया', words: [] },
+    { start: 95, end: 100, text: 'रंग जाऊँ जो मैं हाथ लगाऊँ', words: [] },
+    { start: 130, end: 136, text: 'केसरिया तेरा इश्क़ है पिया', words: [] },
+  ];
+  assert.equal(detectChorusStartTime(devanagariLines, 268), 54);
 });
 
 test('computeLyricCursor handles intro, smooth breath-gap holding, interludes, and outro', () => {
@@ -263,17 +303,16 @@ test('directSongAutonomously steers No Lie & prompt keywords to Apple UI / Fishe
   assert.equal(fisheyeBp.lyricStyle, 'fisheye');
 });
 
-test('musicApi recovers cleanly from Saavn CORS failure across search, lyrics, and infinite radio', async () => {
+test('musicApi makes zero dead-proxy/CORS-spam requests by default, rejects knockoffs, and supports optional custom Saavn endpoint', async () => {
   const origFetch = globalThis.fetch;
+  const requestedUrls: string[] = [];
+  resetSaavnClientStateForTests();
 
   globalThis.fetch = (async (input: RequestInfo | URL) => {
     const url = String(input);
+    requestedUrls.push(url);
 
-    // Simulate CORS block on direct saavn.sumit.co & saavn.dev, but working corsproxy fallback!
-    if (url.startsWith('https://saavn.sumit.co') || url.startsWith('https://saavn.dev') || url.startsWith('https://jiosaavn-api')) {
-      throw new TypeError('Failed to fetch (CORS)');
-    }
-    if (url.startsWith('https://corsproxy.io')) {
+    if (url.startsWith('https://custom-saavn.example/api')) {
       return new Response(
         JSON.stringify({
           success: true,
@@ -295,7 +334,69 @@ test('musicApi recovers cleanly from Saavn CORS failure across search, lyrics, a
         { status: 200 }
       );
     }
+
     if (url.startsWith('https://itunes.apple.com')) {
+      const parsed = new URL(url);
+      const term = (parsed.searchParams.get('term') || '').toLowerCase();
+      const country = parsed.searchParams.get('country') || 'US';
+
+      if (term.includes('husn')) {
+        // US returns knockoff Marshlemon; IN returns authentic Anuv Jain!
+        if (country !== 'IN') {
+          return new Response(
+            JSON.stringify({
+              results: [
+                {
+                  trackId: 888,
+                  trackName: 'Jain Husn Anuv',
+                  artistName: 'Marshlemon',
+                  collectionName: 'Knockoff Hits',
+                  trackTimeMillis: 103000,
+                  artworkUrl100: 'https://art.example/fake.jpg',
+                  previewUrl: 'https://audio.example/fake.m4a',
+                },
+              ],
+            }),
+            { status: 200 }
+          );
+        }
+        return new Response(
+          JSON.stringify({
+            results: [
+              {
+                trackId: 889,
+                trackName: 'Husn',
+                artistName: 'Anuv Jain',
+                collectionName: 'Husn - Single',
+                trackTimeMillis: 217000,
+                artworkUrl100: 'https://art.example/husn-100x100bb.jpg',
+                previewUrl: 'https://audio.example/husn.m4a',
+              },
+            ],
+          }),
+          { status: 200 }
+        );
+      }
+
+      if (term.includes('no lie')) {
+        return new Response(
+          JSON.stringify({
+            results: [
+              {
+                trackId: 101,
+                trackName: 'No Lie (feat. Dua Lipa)',
+                artistName: 'Sean Paul',
+                collectionName: 'Mad Love',
+                trackTimeMillis: 221000,
+                artworkUrl100: 'https://art.example/nolie-100x100bb.jpg',
+                previewUrl: 'https://audio.example/nolie.m4a',
+              },
+            ],
+          }),
+          { status: 200 }
+        );
+      }
+
       return new Response(
         JSON.stringify({
           results: [
@@ -312,6 +413,7 @@ test('musicApi recovers cleanly from Saavn CORS failure across search, lyrics, a
         { status: 200 }
       );
     }
+
     if (url.startsWith('https://api.audius.co')) {
       return new Response(
         JSON.stringify({
@@ -347,23 +449,153 @@ test('musicApi recovers cleanly from Saavn CORS failure across search, lyrics, a
   }) as typeof fetch;
 
   try {
+    // 1. Default unconfigured mode: zero calls to dead Saavn/proxy domains!
     const songs = await searchRealSongs('Tum Hi Ho');
     assert.ok(songs.length >= 1);
-    assert.equal(songs[0].source, 'saavn');
-    assert.equal(songs[0].isFullTrack, true);
+    assert.equal(songs[0].source, 'itunes');
+
+    const featured = await loadFeaturedSongs();
+    const husnCard = featured.find((s) => s.title === 'Husn');
+    assert.ok(husnCard, 'Featured must resolve authentic Husn via IN regional fallback');
+    assert.equal(husnCard.artist, 'Anuv Jain');
+    assert.ok(
+      !featured.some((s) => /marshlemon|jain husn anuv/i.test(`${s.title} ${s.artist}`)),
+      'Featured MUST reject Marshlemon knockoff'
+    );
+
+    const knockoffScore = scoreTrackRelevance(
+      {
+        id: 'fake',
+        title: 'Jain Husn Anuv',
+        artist: 'Marshlemon',
+        album: '',
+        duration: 30,
+        fullDuration: 103,
+        artworkUrl: '',
+        audioUrl: '',
+        source: 'itunes',
+        isFullTrack: false,
+      },
+      'Husn Anuv Jain'
+    );
+    const realScore = scoreTrackRelevance(
+      {
+        id: 'real',
+        title: 'Husn',
+        artist: 'Anuv Jain',
+        album: 'Husn',
+        duration: 30,
+        fullDuration: 217,
+        artworkUrl: '',
+        audioUrl: '',
+        source: 'itunes',
+        isFullTrack: false,
+      },
+      'Husn Anuv Jain'
+    );
+    assert.ok(realScore > knockoffScore + 150, `Expected authentic (${realScore}) >> knockoff (${knockoffScore})`);
+
+    // Two-word query "Husn Anuv" must still catch Marshlemon knockoff, while "No Lie Dua Lipa" must NOT penalize "(feat. Dua Lipa)"!
+    const twoWordKnockoff = scoreTrackRelevance(
+      {
+        id: 'fake2',
+        title: 'Jain Husn Anuv',
+        artist: 'Marshlemon',
+        album: '',
+        duration: 30,
+        fullDuration: 103,
+        artworkUrl: '',
+        audioUrl: '',
+        source: 'itunes',
+        isFullTrack: false,
+      },
+      'Husn Anuv'
+    );
+    const featReal = scoreTrackRelevance(
+      {
+        id: 'feat1',
+        title: 'No Lie (feat. Dua Lipa)',
+        artist: 'Sean Paul',
+        album: 'Mad Love',
+        duration: 30,
+        fullDuration: 221,
+        artworkUrl: '',
+        audioUrl: '',
+        source: 'itunes',
+        isFullTrack: false,
+      },
+      'No Lie Dua Lipa'
+    );
+    assert.ok(twoWordKnockoff < 0, `Expected negative knockoff score for 2-word search, got ${twoWordKnockoff}`);
+    assert.ok(featReal > 180, `Expected feat track high score, got ${featReal}`);
+
+    // Regional IN search surfaces authentic Anuv Jain even when US only returns Marshlemon
+    const husnSearch = await searchRealSongs('Husn Anuv Jain');
+    assert.equal(husnSearch[0].artist, 'Anuv Jain');
+
+    // Featured matcher rejects Lo-Fi / Slowed / Live / short-duration knockoffs
+    assert.equal(
+      matchesFeaturedSpec(
+        {
+          id: 'lofi',
+          title: 'Husn (Lo-Fi)',
+          artist: 'Anuv Jain',
+          album: '',
+          duration: 30,
+          fullDuration: 180,
+          artworkUrl: '',
+          audioUrl: '',
+          source: 'itunes',
+          isFullTrack: false,
+        },
+        { expectedTitle: 'Husn', expectedArtists: ['Anuv Jain'] }
+      ),
+      false
+    );
+    assert.equal(
+      matchesFeaturedSpec(
+        {
+          id: 'short',
+          title: 'Husn',
+          artist: 'Anuv Jain',
+          album: '',
+          duration: 30,
+          fullDuration: 103,
+          artworkUrl: '',
+          audioUrl: '',
+          source: 'itunes',
+          isFullTrack: false,
+        },
+        { expectedTitle: 'Husn', expectedArtists: ['Anuv Jain'] }
+      ),
+      false
+    );
 
     const lrc = await fetchSyncedLyricsDetailed(songs[0]);
     assert.equal(lrc.matchSource, 'lrclib_synced');
     assert.equal(lrc.lines.length, 2);
-    assert.equal(lrc.lines[0].text, 'Hum tere bin ab reh nahi sakte');
 
-    const radio = await fetchInfiniteRadioSongs(songs[0], new Set(['saavn-sv1', 'tumhiho::arijitsingh']));
-    assert.ok(Array.isArray(radio));
-    assert.ok(radio.length >= 1, 'Infinite radio must replenish from iTunes/Audius even when Saavn track is excluded');
+    const radio = await fetchInfiniteRadioSongs(songs[0], new Set(['itunes-99', 'tumhiho::arijitsingh']));
+    assert.ok(radio.length >= 1, 'Infinite radio must replenish from iTunes/Audius');
 
     const station = await launchRadioStation('Electronic Synthwave');
     assert.ok(station.length >= 1);
+
+    // Assert NO dead/rate-limited Saavn mirrors or CORS proxies were ever called
+    const deadPattern = /saavn\.sumit\.co|saavn\.dev|jiosaavn-api|corsproxy\.io|allorigins\.win|cors\.lol|proxy\.cors\.dev/i;
+    assert.deepEqual(
+      requestedUrls.filter((u) => deadPattern.test(u)),
+      [],
+      'Must NOT call dead Saavn mirrors or failing CORS proxies by default'
+    );
+
+    // 2. Optional custom Saavn endpoint works when explicitly configured
+    setCustomSaavnBaseUrl('https://custom-saavn.example/api');
+    const saavnSongs = await searchRealSongs('Tum Hi Ho');
+    assert.equal(saavnSongs[0].source, 'saavn');
+    assert.equal(saavnSongs[0].isFullTrack, true);
   } finally {
+    resetSaavnClientStateForTests();
     globalThis.fetch = origFetch;
   }
 });
@@ -422,6 +654,7 @@ test('LightAudioEngine applies initial volume and falls back cleanly when CORS a
     paused = true;
     ended = false;
     duration = 180;
+    playAttempts = 0;
     private listeners = new Map<string, Array<() => void>>();
 
     constructor() {
@@ -436,6 +669,7 @@ test('LightAudioEngine applies initial volume and falls back cleanly when CORS a
       if (name === 'src') this.src = '';
     }
     async play() {
+      this.playAttempts++;
       if (this.crossOrigin === 'anonymous') {
         throw new Error('CORS blocked audio stream');
       }
@@ -462,11 +696,71 @@ test('LightAudioEngine applies initial volume and falls back cleanly when CORS a
     assert.equal(engine.isPlaying(), true);
     assert.equal(createdAudios[1].src, 'https://cdn.example/no-cors.mp4');
 
+    const primaryAttemptsBefore = (createdAudios[0] as unknown as MockAudio).playAttempts;
+    await engine.loadAndPlay('https://cdn.example/no-cors-2.mp4');
+    assert.equal(
+      (createdAudios[0] as unknown as MockAudio).playAttempts,
+      primaryAttemptsBefore,
+      'Subsequent track from CORS-blocked origin must skip crossOrigin primaryAudio directly'
+    );
+    assert.equal(createdAudios[1].src, 'https://cdn.example/no-cors-2.mp4');
+
     engine.setVolume(0.45);
     assert.equal(createdAudios[1].volume, 0.45);
     engine.dispose();
   } finally {
     (globalThis as Record<string, unknown>).Audio = prevAudio;
     (globalThis as Record<string, unknown>).window = prevWin;
+  }
+});
+
+test('fetchSyncedLyricsDetailed uses /api/search first without speculative /api/get 404 requests', async () => {
+  const origFetch = globalThis.fetch;
+  const requestedUrls: string[] = [];
+
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = String(input);
+    requestedUrls.push(url);
+
+    if (url.startsWith('https://lrclib.net/api/search')) {
+      return new Response(
+        JSON.stringify([
+          {
+            id: 777,
+            trackName: 'Kesariya',
+            artistName: 'Pritam, Arijit Singh',
+            duration: 268,
+            syncedLyrics:
+              '[00:14.00] Mujhko itna bataye koi\n[00:54.00] Kesariya tera ishq hai piya\n[01:32.00] Kesariya tera ishq hai piya',
+          },
+        ]),
+        { status: 200 }
+      );
+    }
+    return new Response('Not found', { status: 404 });
+  }) as typeof fetch;
+
+  try {
+    const res = await fetchSyncedLyricsDetailed({
+      id: 'it-kesariya',
+      title: 'Kesariya (From "Brahmastra")',
+      artist: 'Pritam, Arijit Singh',
+      album: 'Brahmastra',
+      duration: 30,
+      fullDuration: 268,
+      artworkUrl: '',
+      audioUrl: '',
+      source: 'itunes',
+      isFullTrack: false,
+    });
+    assert.equal(res.matchSource, 'lrclib_synced');
+    assert.equal(res.lines.length, 3);
+    assert.equal(
+      requestedUrls.some((u) => u.includes('/api/get')),
+      false,
+      'Must NOT send speculative /api/get when /api/search matched'
+    );
+  } finally {
+    globalThis.fetch = origFetch;
   }
 });

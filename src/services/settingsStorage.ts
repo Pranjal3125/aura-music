@@ -189,24 +189,27 @@ function writeCookieAndStorage(settings: AuraUserSettings): void {
 
 export function loadUserSettings(): AuraUserSettings {
   const cookieRaw = readCookieValue(PREFS_COOKIE_NAME);
-  if (cookieRaw) {
-    try {
-      return sanitizeSettings(JSON.parse(decodeURIComponent(cookieRaw)));
-    } catch {
-      // Fall through to localStorage
-    }
-  }
 
   if (typeof window !== 'undefined' && window.localStorage) {
     try {
       const stored = window.localStorage.getItem(PREFS_COOKIE_NAME);
       if (stored) {
         const parsed = sanitizeSettings(JSON.parse(stored));
-        writeCookieAndStorage(parsed);
+        if (!cookieRaw) {
+          writeCookieAndStorage(parsed);
+        }
         return parsed;
       }
     } catch {
-      // Ignore parse/storage errors
+      // Fall through to cookie
+    }
+  }
+
+  if (cookieRaw) {
+    try {
+      return sanitizeSettings(JSON.parse(decodeURIComponent(cookieRaw)));
+    } catch {
+      // Ignore malformed cookie
     }
   }
 

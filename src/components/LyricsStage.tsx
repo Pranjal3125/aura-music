@@ -76,90 +76,8 @@ export const LyricsStage: React.FC<LyricsStageProps> = ({
   const isCanvasWorld = CANVAS_WORLDS.includes(style);
   const isLiveStream = song.source === 'live_tab' || song.source === 'live_mic';
 
-  // Live Audio Capture OR No Lyrics Available Yet -> Luxury Vinyl + Sonic Halo Centerpiece
-  if (!hasLyrics || isLiveStream) {
-    return (
-      <div className="relative z-10 w-full h-full flex flex-col items-center justify-center px-6 text-center select-none">
-        <div className="relative mb-8 flex items-center justify-center">
-          <div
-            className="absolute w-80 h-80 rounded-full blur-[95px] opacity-45 pointer-events-none"
-            style={{ backgroundColor: primary }}
-          />
-          <div
-            className="absolute w-72 h-72 rounded-full border pointer-events-none animate-aura-vinyl-pulse"
-            style={{
-              borderColor: `${primary}55`,
-              boxShadow: `0 0 42px ${primary}33, inset 0 0 28px ${secondary}22`,
-              animationPlayState: isPlaying ? 'running' : 'paused',
-            }}
-          />
-          <div
-            className="absolute right-[-38px] w-52 h-52 sm:w-60 sm:h-60 rounded-full bg-[#09090d] border border-white/10 shadow-2xl flex items-center justify-center animate-vinyl-spin"
-            style={{
-              animationPlayState: isPlaying ? 'running' : 'paused',
-              backgroundImage:
-                'repeating-radial-gradient(circle, #0b0b10 0px, #0b0b10 3px, #16161f 4px, #0b0b10 5px)',
-            }}
-          >
-            <div className="w-14 h-14 rounded-full flex items-center justify-center" style={{ backgroundColor: primary }}>
-              <div className="w-3 h-3 rounded-full bg-black" />
-            </div>
-          </div>
-
-          <div
-            className="relative w-56 h-56 sm:w-64 sm:h-64 rounded-2xl overflow-hidden border border-white/15 transition-transform duration-300 ease-apple"
-            style={{
-              boxShadow: `0 28px 80px rgba(0,0,0,0.95), 0 0 48px ${primary}55`,
-              transform: isPlaying ? 'scale(1)' : 'scale(0.96)',
-            }}
-          >
-            {song.artworkUrl ? (
-              <img src={song.artworkUrl} alt={song.title} className="w-full h-full object-cover" />
-            ) : isLiveStream ? (
-              <div className="w-full h-full bg-zinc-950 flex flex-col items-center justify-center gap-2">
-                <Radio className="w-14 h-14 animate-pulse" style={{ color: primary }} />
-                <span className="text-[10px] font-mono-code tracking-widest uppercase text-white/55">
-                  LIVE DSP ACTIVE
-                </span>
-              </div>
-            ) : (
-              <div className="w-full h-full bg-zinc-950 flex items-center justify-center">
-                <Disc3 className="w-16 h-16 text-white/25" />
-              </div>
-            )}
-          </div>
-        </div>
-
-        <h1 className="font-display text-2xl sm:text-4xl font-bold tracking-tight text-white max-w-xl">
-          {song.title}
-        </h1>
-        <p className="text-sm sm:text-base text-white/55 font-grotesk mt-1.5">{song.artist}</p>
-
-        <div className="mt-5 flex flex-col items-center gap-3">
-          <div className="text-[11px] font-mono-code tracking-widest uppercase text-white/45">
-            {lyricsLoading
-              ? 'Syncing celestial lyrics...'
-              : isLiveStream
-                ? 'Live Audio Edge Aura · Reacting in real time'
-                : 'No synced lyrics matched automatically'}
-          </div>
-          {!lyricsLoading && !isLiveStream && onOpenLyricsSearch && (
-            <button
-              type="button"
-              onClick={onOpenLyricsSearch}
-              className="oled-pill px-3.5 py-1.5 rounded-full text-xs text-white/85 hover:text-white flex items-center gap-1.5 cursor-pointer"
-            >
-              <Search className="w-3.5 h-3.5" style={{ color: primary }} />
-              <span>Find / Sync Lyrics Manually</span>
-            </button>
-          )}
-        </div>
-      </div>
-    );
-  }
-
   // Flagship Viral Reel Mode: Apple UI (iMessage + Apple Pay + Dynamic Island + Frosted Cards)
-  if (style === 'apple_ui') {
+  if (hasLyrics && !isLiveStream && style === 'apple_ui') {
     return (
       <AppleUiLyricsStage
         song={song}
@@ -183,10 +101,16 @@ export const LyricsStage: React.FC<LyricsStageProps> = ({
       ? Math.min(100, Math.max(4, ((Math.max(0, activeWordIdx) + 1) / currentLine.words.length) * 100))
       : 100;
 
+  const showCanvasBg = isCanvasWorld && !isLiveStream;
+
   return (
-    <div className="relative z-10 w-full h-full flex flex-col items-center justify-center px-6 sm:px-12 pt-14 pb-28 select-none">
-      {/* 120FPS CANVAS WORLDS STAY MOUNTED EVEN DURING INTROS, INTERLUDES & OUTRO */}
-      {isCanvasWorld && (
+    <div
+      className={`relative z-10 w-full h-full flex flex-col items-center justify-center select-none ${
+        !hasLyrics || isLiveStream ? 'px-6 text-center' : 'px-6 sm:px-12 pt-14 pb-28'
+      }`}
+    >
+      {/* 120FPS CANVAS WORLDS STAY CONTINUOUSLY MOUNTED ACROSS LOADING, ROLLOVERS, INTROS & OUTROS */}
+      {showCanvasBg && (
         <CosmosLyricsCanvas
           mode={style as CanvasLyricMode}
           lyrics={lyrics}
@@ -198,8 +122,110 @@ export const LyricsStage: React.FC<LyricsStageProps> = ({
         />
       )}
 
+      {/* Live Audio Capture OR No Lyrics Available Yet -> Transition Card or Luxury Artwork */}
+      {(!hasLyrics || isLiveStream) &&
+        (showCanvasBg && lyricsLoading ? (
+          <div className="relative z-10 oled-surface rounded-3xl px-6 py-5 flex items-center gap-4 border border-white/15 max-w-md w-full animate-panel-in">
+            <div
+              className="w-16 h-16 rounded-2xl overflow-hidden bg-zinc-900 shrink-0 border border-white/15"
+              style={{ boxShadow: `0 0 24px ${primary}44` }}
+            >
+              {song.artworkUrl ? (
+                <img src={song.artworkUrl} alt={song.title} className="w-full h-full object-cover" />
+              ) : (
+                <Disc3 className="w-8 h-8 m-4 text-white/30 animate-vinyl-spin" />
+              )}
+            </div>
+            <div className="flex-1 min-w-0 text-left">
+              <div className="text-[10px] font-mono-code uppercase tracking-widest text-white/45 flex items-center gap-1.5">
+                <Sparkles className="w-3 h-3 animate-pulse" style={{ color: primary }} />
+                <span>Syncing lyrics...</span>
+              </div>
+              <div className="font-display text-lg font-bold text-white truncate mt-0.5">{song.title}</div>
+              <div className="text-xs text-white/50 truncate">{song.artist}</div>
+            </div>
+          </div>
+        ) : (
+          <div className="relative z-10 flex flex-col items-center">
+            <div className="relative mb-8 flex items-center justify-center">
+              <div
+                className="absolute w-80 h-80 rounded-full blur-[95px] opacity-45 pointer-events-none"
+                style={{ backgroundColor: primary }}
+              />
+              <div
+                className="absolute w-72 h-72 rounded-full border pointer-events-none animate-aura-vinyl-pulse"
+                style={{
+                  borderColor: `${primary}55`,
+                  boxShadow: `0 0 42px ${primary}33, inset 0 0 28px ${secondary}22`,
+                  animationPlayState: isPlaying ? 'running' : 'paused',
+                }}
+              />
+              <div
+                className="absolute right-[-38px] w-52 h-52 sm:w-60 sm:h-60 rounded-full bg-[#09090d] border border-white/10 shadow-2xl flex items-center justify-center animate-vinyl-spin"
+                style={{
+                  animationPlayState: isPlaying ? 'running' : 'paused',
+                  backgroundImage:
+                    'repeating-radial-gradient(circle, #0b0b10 0px, #0b0b10 3px, #16161f 4px, #0b0b10 5px)',
+                }}
+              >
+                <div className="w-14 h-14 rounded-full flex items-center justify-center" style={{ backgroundColor: primary }}>
+                  <div className="w-3 h-3 rounded-full bg-black" />
+                </div>
+              </div>
+
+              <div
+                className="relative w-56 h-56 sm:w-64 sm:h-64 rounded-2xl overflow-hidden border border-white/15 transition-transform duration-300 ease-apple"
+                style={{
+                  boxShadow: `0 28px 80px rgba(0,0,0,0.95), 0 0 48px ${primary}55`,
+                  transform: isPlaying ? 'scale(1)' : 'scale(0.96)',
+                }}
+              >
+                {song.artworkUrl ? (
+                  <img src={song.artworkUrl} alt={song.title} className="w-full h-full object-cover" />
+                ) : isLiveStream ? (
+                  <div className="w-full h-full bg-zinc-950 flex flex-col items-center justify-center gap-2">
+                    <Radio className="w-14 h-14 animate-pulse" style={{ color: primary }} />
+                    <span className="text-[10px] font-mono-code tracking-widest uppercase text-white/55">
+                      LIVE DSP ACTIVE
+                    </span>
+                  </div>
+                ) : (
+                  <div className="w-full h-full bg-zinc-950 flex items-center justify-center">
+                    <Disc3 className="w-16 h-16 text-white/25" />
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <h1 className="font-display text-2xl sm:text-4xl font-bold tracking-tight text-white max-w-xl">
+              {song.title}
+            </h1>
+            <p className="text-sm sm:text-base text-white/55 font-grotesk mt-1.5">{song.artist}</p>
+
+            <div className="mt-5 flex flex-col items-center gap-3">
+              <div className="text-[11px] font-mono-code tracking-widest uppercase text-white/45">
+                {lyricsLoading
+                  ? 'Syncing celestial lyrics...'
+                  : isLiveStream
+                    ? 'Live Audio Edge Aura · Reacting in real time'
+                    : 'No synced lyrics matched automatically'}
+              </div>
+              {!lyricsLoading && !isLiveStream && onOpenLyricsSearch && (
+                <button
+                  type="button"
+                  onClick={onOpenLyricsSearch}
+                  className="oled-pill px-3.5 py-1.5 rounded-full text-xs text-white/85 hover:text-white flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Search className="w-3.5 h-3.5" style={{ color: primary }} />
+                  <span>Find / Sync Lyrics Manually</span>
+                </button>
+              )}
+            </div>
+          </div>
+        ))}
+
       {/* OUTRO HOLD FOR NON-APPLE-UI, NON-CANVAS MODES */}
-      {!currentLine && !upcomingLine && !isCanvasWorld && (
+      {hasLyrics && !isLiveStream && !currentLine && !upcomingLine && !isCanvasWorld && (
         <div className="relative z-10 w-full max-w-xl flex flex-col items-center text-center space-y-3 animate-panel-in">
           <div className="text-[10px] font-mono-code uppercase tracking-[0.26em] text-white/40">
             Outro · {song.title}
@@ -214,7 +240,7 @@ export const LyricsStage: React.FC<LyricsStageProps> = ({
       )}
 
       {/* INTRO / INTERLUDE OVERLAY FOR NON-APPLE-UI MODES SO LYRICS ARE ALWAYS VISIBLE */}
-      {!currentLine && upcomingLine && (
+      {hasLyrics && !isLiveStream && !currentLine && upcomingLine && (
         <div className="relative z-10 w-full max-w-2xl flex flex-col items-center text-center space-y-6 animate-panel-in">
           <div className="oled-surface rounded-3xl p-5 sm:p-6 flex items-center gap-4 border border-white/15 max-w-md w-full">
             <div

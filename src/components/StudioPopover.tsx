@@ -134,6 +134,9 @@ export const StudioPopover: React.FC<StudioPopoverProps> = ({
       className={`fixed top-20 ${
         hasActiveSong ? 'bottom-36' : 'bottom-6'
       } right-5 z-50 w-[min(92vw,404px)] oled-surface rounded-3xl flex flex-col overflow-hidden animate-panel-in`}
+      style={{
+        background: 'linear-gradient(180deg, rgba(13, 13, 20, 0.985) 0%, rgba(6, 6, 10, 0.995) 100%)',
+      }}
     >
       {/* Studio Header + Segmented Tabs */}
       <div className="p-4 pb-3 border-b border-white/[0.07] space-y-3 shrink-0">
