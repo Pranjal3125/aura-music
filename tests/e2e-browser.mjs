@@ -717,10 +717,12 @@ try {
       const rim = document.querySelector('.aura-edge-rim');
       const beat = document.querySelector('.aura-edge-beat-flash');
       const bloom = document.querySelector('.aura-edge-bloom');
+      const lumnCanvas = document.querySelector('canvas[data-aura-lumn-canvas="true"]');
       return {
         hasLegacyGlowVar: Boolean(rootChild?.style?.getPropertyValue('--aura-glow-alpha')),
         hasLegacyPulseVar: Boolean(rootChild?.style?.getPropertyValue('--aura-pulse-alpha')),
         hasFilmGrain: Boolean(document.querySelector('.aura-film-grain')),
+        hasLumnCanvas: Boolean(lumnCanvas && lumnCanvas.width > 0 && lumnCanvas.height > 0),
         rimOpacity: rim?.style?.opacity || '',
         beatOpacity: beat?.style?.opacity || '',
         bloomOpacity: bloom?.style?.opacity || '',
@@ -730,6 +732,7 @@ try {
   assert.equal(edgePerfCheck.hasLegacyGlowVar, false, `Legacy root --aura-glow-alpha must NOT be mutated per frame: ${JSON.stringify(edgePerfCheck)}`);
   assert.equal(edgePerfCheck.hasLegacyPulseVar, false, `Legacy root --aura-pulse-alpha must NOT be mutated per frame: ${JSON.stringify(edgePerfCheck)}`);
   assert.equal(edgePerfCheck.hasFilmGrain, false, 'Heavy SVG feTurbulence .aura-film-grain must be removed');
+  assert.equal(edgePerfCheck.hasLumnCanvas, true, `GPU LumnEdgeCanvas must be mounted and sized: ${JSON.stringify(edgePerfCheck)}`);
   assert.ok(parseFloat(edgePerfCheck.rimOpacity) > 0.4, `Leaf .aura-edge-rim must be actively driven via inline opacity: ${JSON.stringify(edgePerfCheck)}`);
   assert.ok(edgePerfCheck.beatOpacity !== '', `Leaf .aura-edge-beat-flash must be wired to rAF: ${JSON.stringify(edgePerfCheck)}`);
 

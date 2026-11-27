@@ -69,6 +69,7 @@ import { COMPANION_SNAPSHOT_KEY, CompanionScreen } from './components/CompanionS
 import { LyricsTimelineDrawer } from './components/LyricsTimelineDrawer';
 import { SpectrumHorizon } from './components/SpectrumHorizon';
 import { ClickPulseOverlay } from './components/ClickPulseOverlay';
+import { LumnEdgeCanvas } from './components/LumnEdgeCanvas';
 import { LYRIC_STYLES, StudioPopover } from './components/StudioPopover';
 
 function fmtTime(sec: number): string {
@@ -229,8 +230,6 @@ const AuraStage: React.FC = () => {
   const edgeRimRef = useRef<HTMLDivElement | null>(null);
   const edgeBeatRef = useRef<HTMLDivElement | null>(null);
   const edgeBloomRef = useRef<HTMLDivElement | null>(null);
-  const edgeLaserRef = useRef<HTMLDivElement | null>(null);
-  const edgeOrbsRef = useRef<HTMLDivElement | null>(null);
   const seekFillRef = useRef<HTMLDivElement | null>(null);
   const timeLabelRef = useRef<HTMLSpanElement | null>(null);
   const lastWakeMsRef = useRef(0);
@@ -457,7 +456,7 @@ const AuraStage: React.FC = () => {
       if (!song.isFullTrack && song.source === 'itunes') {
         const upgrade = await Promise.race<SongItem | null>([
           upgradeToFullSaavnTrack(song),
-          new Promise<null>((resolve) => window.setTimeout(() => resolve(null), 2200)),
+          new Promise<null>((resolve) => window.setTimeout(() => resolve(null), 1200)),
         ]);
         if (activeSongIdRef.current !== song.id) return;
         if (upgrade) {
@@ -876,7 +875,7 @@ const AuraStage: React.FC = () => {
     let lastRimOp = '';
     let lastBeatOp = '';
     let lastBloomOp = '';
-    let lastOrbOp = '';
+    let lastRimDomMs = 0;
     let lastSeekScale = -1;
     let lastTimeStr = '';
     let lastCountdownInt = -1;
@@ -914,36 +913,34 @@ const AuraStage: React.FC = () => {
       ap.isLiveFft = rawPulse.isLiveFft;
       ap.spectrum = rawPulse.spectrum;
 
-      // Zero-repaint Lumn perimeter edge lighting driven strictly via leaf GPU opacity refs
+      // Liquid Lumn perimeter waves render at full native 120fps on GPU LumnEdgeCanvas (0 DOM writes).
+      // Lightweight DOM bezel filament hooks update only on quantized steps (~10Hz ceiling) -> near-zero RecalcStyle!
       const targetGlow = Math.min(1, 0.34 + ap.subBass * 0.44 + ap.beat * 0.34 + ap.vocal * 0.14);
       const targetBloom = Math.min(0.92, 0.15 + ap.bass * 0.44 + ap.beat * 0.42);
-      const targetBeatFlash = Math.min(0.9, ap.beat * 0.82);
+      const targetBeatFlash = Math.min(0.85, ap.beat * 0.72);
 
       smoothGlowAlpha += (targetGlow - smoothGlowAlpha) * (1 - Math.exp(-12 * dt));
       smoothBloomAlpha += (targetBloom - smoothBloomAlpha) * (1 - Math.exp(-14 * dt));
-      smoothBeatFlash += (targetBeatFlash - smoothBeatFlash) * (targetBeatFlash > smoothBeatFlash ? 1 - Math.exp(-32 * dt) : 1 - Math.exp(-10 * dt));
+      smoothBeatFlash += (targetBeatFlash - smoothBeatFlash) * (targetBeatFlash > smoothBeatFlash ? 1 - Math.exp(-28 * dt) : 1 - Math.exp(-10 * dt));
 
-      const rimOp = (0.5 + smoothGlowAlpha * 0.5).toFixed(2);
-      const beatOp = smoothBeatFlash.toFixed(2);
-      const bloomOp = smoothBloomAlpha.toFixed(2);
-      const orbOp = (0.3 + smoothGlowAlpha * 0.58).toFixed(2);
+      if (lastRimDomMs === 0 || now - lastRimDomMs > 105) {
+        lastRimDomMs = now;
+        const rimOp = (Math.round((0.5 + smoothGlowAlpha * 0.45) * 12) / 12).toFixed(2);
+        const beatOp = (Math.round(smoothBeatFlash * 10) / 10).toFixed(2);
+        const bloomOp = (Math.round(smoothBloomAlpha * 10) / 10).toFixed(2);
 
-      if (rimOp !== lastRimOp) {
-        lastRimOp = rimOp;
-        if (edgeRimRef.current) edgeRimRef.current.style.opacity = rimOp;
-        if (edgeLaserRef.current) edgeLaserRef.current.style.opacity = rimOp;
-      }
-      if (beatOp !== lastBeatOp) {
-        lastBeatOp = beatOp;
-        if (edgeBeatRef.current) edgeBeatRef.current.style.opacity = beatOp;
-      }
-      if (bloomOp !== lastBloomOp) {
-        lastBloomOp = bloomOp;
-        if (edgeBloomRef.current) edgeBloomRef.current.style.opacity = bloomOp;
-      }
-      if (orbOp !== lastOrbOp) {
-        lastOrbOp = orbOp;
-        if (edgeOrbsRef.current) edgeOrbsRef.current.style.opacity = orbOp;
+        if (rimOp !== lastRimOp) {
+          lastRimOp = rimOp;
+          if (edgeRimRef.current) edgeRimRef.current.style.opacity = rimOp;
+        }
+        if (beatOp !== lastBeatOp) {
+          lastBeatOp = beatOp;
+          if (edgeBeatRef.current) edgeBeatRef.current.style.opacity = beatOp;
+        }
+        if (bloomOp !== lastBloomOp) {
+          lastBloomOp = bloomOp;
+          if (edgeBloomRef.current) edgeBloomRef.current.style.opacity = bloomOp;
+        }
       }
 
       // Smoothly transition root CSS palette ONLY while changing, then stop touching rootRef!
@@ -998,7 +995,7 @@ const AuraStage: React.FC = () => {
       const durSec = engine.getDuration() || s.activeSong?.duration || 0;
 
       if (seekFillRef.current && durSec > 0) {
-        const ratio = Math.round(Math.min(1, Math.max(0, curSec / durSec)) * 400) / 400;
+        const ratio = Math.round(Math.min(1, Math.max(0, curSec / durSec)) * 200) / 200;
         if (ratio !== lastSeekScale) {
           lastSeekScale = ratio;
           seekFillRef.current.style.transform = `scaleX(${ratio.toFixed(4)})`;
@@ -1206,15 +1203,20 @@ const AuraStage: React.FC = () => {
         ctx.drawImage(specCanvas, (w - sw) * 0.5, h - 88, sw, 84);
       }
 
-      const gAlpha = Math.min(0.9, 0.35 + bass * 0.55);
-      ctx.save();
-      ctx.strokeStyle = p;
-      ctx.globalAlpha = gAlpha;
-      ctx.lineWidth = 6;
-      ctx.shadowColor = p;
-      ctx.shadowBlur = 32;
-      ctx.strokeRect(2, 2, w - 4, h - 4);
-      ctx.restore();
+      const lumnCanvas = document.querySelector('canvas[data-aura-lumn-canvas="true"]') as HTMLCanvasElement | null;
+      if (lumnCanvas && lumnCanvas.width > 0 && lumnCanvas.height > 0) {
+        ctx.drawImage(lumnCanvas, 0, 0, w, h);
+      } else {
+        const gAlpha = Math.min(0.9, 0.35 + bass * 0.55);
+        ctx.save();
+        ctx.strokeStyle = p;
+        ctx.globalAlpha = gAlpha;
+        ctx.lineWidth = 6;
+        ctx.shadowColor = p;
+        ctx.shadowBlur = 32;
+        ctx.strokeRect(2, 2, w - 4, h - 4);
+        ctx.restore();
+      }
 
       requestAnimationFrame(pump);
     };
@@ -1293,7 +1295,7 @@ const AuraStage: React.FC = () => {
     if (activeSong && isPlaying && !vibePanelOpen && !lyricsDrawerOpen && !searchOpen) {
       hideTimerRef.current = window.setTimeout(() => {
         setChromeVisible(false);
-      }, 3600);
+      }, 2400);
     }
   }, [activeSong, isPlaying, vibePanelOpen, lyricsDrawerOpen, searchOpen, pureCinema]);
 
@@ -1414,6 +1416,70 @@ const AuraStage: React.FC = () => {
     [handleManualSearchLyrics]
   );
   const handleCloseStudio = useCallback(() => setVibePanelOpen(false), []);
+  const handleSelectSearchSong = useCallback(
+    (song: SongItem, list: SongItem[]) => {
+      void playSong(song, list);
+    },
+    [playSong]
+  );
+  const handleAddSearchSongToQueue = useCallback(
+    (song: SongItem) => {
+      setQueue((q) => [...q, song]);
+      showToast(`Queued "${song.title}"`);
+    },
+    [showToast]
+  );
+  const handleToggleVisualIcons = useCallback(() => {
+    setVisualIcons((prev) => {
+      const next = !prev;
+      saveUserSettings({ visualIcons: next });
+      showToast(next ? 'Smart Lyric Icons ON' : 'Smart Lyric Icons OFF');
+      return next;
+    });
+  }, [showToast]);
+  const handleToggleLockPreset = useCallback(() => {
+    setLockPreset((prev) => {
+      const next = !prev;
+      saveUserSettings({ lockPreset: next });
+      showToast(next ? 'Palette Locked across songs' : 'Auto-Adapting palette per song');
+      return next;
+    });
+  }, [showToast]);
+  const handleSelectEqPreset = useCallback(
+    (id: EqPresetId) => {
+      setEqPreset(id);
+      const eq = EQ_PRESETS[id];
+      const nextBands = { bass: eq.bass, mid: eq.mid, treble: eq.treble };
+      setEqBands(nextBands);
+      audioRef.current?.setEq(eq.bass, eq.mid, eq.treble);
+      saveUserSettings({ eqPreset: id, eqBands: nextBands });
+      showToast(`Audio EQ: ${eq.label}`);
+    },
+    [showToast]
+  );
+  const handleChangeEqBand = useCallback((band: keyof EqBands, val: number) => {
+    setEqBands((prev) => {
+      const next = { ...prev, [band]: val };
+      setEqPreset('custom');
+      audioRef.current?.setEq(next.bass, next.mid, next.treble);
+      saveUserSettings({ eqPreset: 'custom', eqBands: next });
+      return next;
+    });
+  }, []);
+  const handleToggleFocus = useCallback(() => {
+    setFocusRemaining((r) => (r === null ? 25 * 60 : null));
+  }, []);
+  const handleStartLiveTab = useCallback(() => {
+    void handleStartLiveAudio('tab');
+  }, [handleStartLiveAudio]);
+  const handleSaveGeminiKey = useCallback(() => {
+    const clean = keyDraft.trim();
+    setGeminiKey(clean);
+    if (clean) localStorage.setItem('aura_gemini_key', clean);
+    else localStorage.removeItem('aura_gemini_key');
+    setKeySaved(true);
+    setTimeout(() => setKeySaved(false), 1500);
+  }, [keyDraft]);
   const handleSaveSaavnUrl = useCallback(() => {
     const savedUrl = setCustomSaavnBaseUrl(saavnUrlDraft);
     setSaavnUrlDraft(savedUrl || '');
@@ -1516,28 +1582,20 @@ const AuraStage: React.FC = () => {
         />
       )}
 
-      {/* Zero-Repaint 120fps Lumn-Grade OLED Perimeter Edge Lighting (direct GPU leaf refs) */}
+      {/* 120fps GPU WebGL2 Lumn Liquid Perimeter Lighting (zero blur, zero CSS box-shadow) */}
       {blueprint.edgeStyle !== 'off' && (
         <div
           className="aura-edge-frame"
-          style={{ opacity: blueprint.edgeStyle === 'breathing_aura' ? 0.68 : 1 }}
+          style={{ opacity: blueprint.edgeStyle === 'breathing_aura' ? 0.72 : 1 }}
         >
+          <LumnEdgeCanvas
+            edgeStyle={blueprint.edgeStyle}
+            palette={blueprint.palette}
+            audioPulseRef={audioPulseRef}
+          />
           <div ref={edgeRimRef} className="aura-edge-rim" />
           <div ref={edgeBeatRef} className="aura-edge-beat-flash" />
           <div ref={edgeBloomRef} className="aura-edge-bloom" />
-          {(blueprint.edgeStyle === 'laser_orbit' || blueprint.edgeStyle === 'violet_prism') && (
-            <div ref={edgeLaserRef} className="aura-edge-laser-ring" />
-          )}
-          {(blueprint.edgeStyle === 'lumn_vivid' ||
-            blueprint.edgeStyle === 'laser_orbit' ||
-            blueprint.edgeStyle === 'violet_prism') && (
-            <div ref={edgeOrbsRef} className="aura-edge-orbs">
-              <div className="aura-edge-orb-h aura-orb-top" />
-              <div className="aura-edge-orb-h aura-orb-bottom" />
-              <div className="aura-edge-orb-v aura-orb-left" />
-              <div className="aura-edge-orb-v aura-orb-right" />
-            </div>
-          )}
         </div>
       )}
 
@@ -1630,8 +1688,10 @@ const AuraStage: React.FC = () => {
                 <div className="relative flex items-center justify-center">
                   <div
                     aria-hidden
-                    className="absolute w-56 h-20 rounded-full blur-3xl opacity-40 pointer-events-none"
-                    style={{ background: `linear-gradient(90deg, ${primary}, ${blueprint.palette.secondary})` }}
+                    className="absolute w-72 h-28 rounded-full opacity-45 pointer-events-none"
+                    style={{
+                      background: `radial-gradient(ellipse at center, ${primary}66 0%, ${blueprint.palette.secondary}24 42%, transparent 74%)`,
+                    }}
                   />
                   <h1 className="relative font-display text-4xl sm:text-5xl font-extrabold tracking-[0.26em] bg-gradient-to-b from-white via-white to-white/60 bg-clip-text text-transparent">
                     AURA
@@ -1646,11 +1706,8 @@ const AuraStage: React.FC = () => {
               <SearchBar
                 accentColor={primary}
                 externalQuery={externalSearchQuery}
-                onSelectSong={(song, list) => void playSong(song, list)}
-                onAddToQueue={(song) => {
-                  setQueue((q) => [...q, song]);
-                  showToast(`Queued "${song.title}"`);
-                }}
+                onSelectSong={handleSelectSearchSong}
+                onAddToQueue={handleAddSearchSongToQueue}
                 onUploadLocalFile={handleLocalFile}
                 onDropdownToggle={setSearchOpen}
               />
@@ -1866,11 +1923,8 @@ const AuraStage: React.FC = () => {
             <SearchBar
               compact
               accentColor={primary}
-              onSelectSong={(song, list) => void playSong(song, list)}
-              onAddToQueue={(song) => {
-                setQueue((q) => [...q, song]);
-                showToast(`Added "${song.title}" to Queue`);
-              }}
+              onSelectSong={handleSelectSearchSong}
+              onAddToQueue={handleAddSearchSongToQueue}
               onUploadLocalFile={handleLocalFile}
               onDropdownToggle={setSearchOpen}
             />
@@ -2282,19 +2336,9 @@ const AuraStage: React.FC = () => {
         onApplyPreset={applyPreset}
         onUpdateVisual={updateVisualSetting}
         visualIcons={visualIcons}
-        onToggleVisualIcons={() => {
-          const next = !visualIcons;
-          setVisualIcons(next);
-          saveUserSettings({ visualIcons: next });
-          showToast(next ? 'Smart Lyric Icons ON' : 'Smart Lyric Icons OFF');
-        }}
+        onToggleVisualIcons={handleToggleVisualIcons}
         lockPreset={lockPreset}
-        onToggleLockPreset={() => {
-          const next = !lockPreset;
-          setLockPreset(next);
-          saveUserSettings({ lockPreset: next });
-          showToast(next ? 'Palette Locked across songs' : 'Auto-Adapting palette per song');
-        }}
+        onToggleLockPreset={handleToggleLockPreset}
         hasActiveSong={Boolean(activeSong)}
         promptInput={promptInput}
         onPromptInputChange={setPromptInput}
@@ -2302,39 +2346,18 @@ const AuraStage: React.FC = () => {
         isDirecting={isDirecting}
         eqPreset={eqPreset}
         eqBands={eqBands}
-        onSelectEqPreset={(id) => {
-          setEqPreset(id);
-          const eq = EQ_PRESETS[id];
-          const nextBands = { bass: eq.bass, mid: eq.mid, treble: eq.treble };
-          setEqBands(nextBands);
-          audioRef.current?.setEq(eq.bass, eq.mid, eq.treble);
-          saveUserSettings({ eqPreset: id, eqBands: nextBands });
-          showToast(`Audio EQ: ${eq.label}`);
-        }}
-        onChangeEqBand={(band, val) => {
-          const next = { ...eqBands, [band]: val };
-          setEqBands(next);
-          setEqPreset('custom');
-          audioRef.current?.setEq(next.bass, next.mid, next.treble);
-          saveUserSettings({ eqPreset: 'custom', eqBands: next });
-        }}
+        onSelectEqPreset={handleSelectEqPreset}
+        onChangeEqBand={handleChangeEqBand}
         volume={volume}
         muted={muted}
         onChangeVolume={updateVolume}
         onToggleMute={toggleMute}
         focusRemaining={focusRemaining}
-        onToggleFocus={() => setFocusRemaining((r) => (r === null ? 25 * 60 : null))}
-        onStartLiveTab={() => void handleStartLiveAudio('tab')}
+        onToggleFocus={handleToggleFocus}
+        onStartLiveTab={handleStartLiveTab}
         keyDraft={keyDraft}
         onKeyDraftChange={setKeyDraft}
-        onSaveKey={() => {
-          const clean = keyDraft.trim();
-          setGeminiKey(clean);
-          if (clean) localStorage.setItem('aura_gemini_key', clean);
-          else localStorage.removeItem('aura_gemini_key');
-          setKeySaved(true);
-          setTimeout(() => setKeySaved(false), 1500);
-        }}
+        onSaveKey={handleSaveGeminiKey}
         keySaved={keySaved}
         saavnUrlDraft={saavnUrlDraft}
         onSaavnUrlDraftChange={setSaavnUrlDraft}

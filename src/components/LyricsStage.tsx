@@ -65,17 +65,20 @@ export const LyricsStage: React.FC<LyricsStageProps> = React.memo(({
     let rafId = 0;
     let lastSc = -1;
     let lastTy = -999;
-    const tick = () => {
+    let lastTickMs = 0;
+    const tick = (now: number) => {
       rafId = requestAnimationFrame(tick);
       if (document.hidden || !domPulseRef.current) return;
+      if (now - lastTickMs < 16) return;
+      lastTickMs = now;
       const p = audioPulseRef.current;
       const voc = p.vocal ?? p.mid;
-      const sc = Math.round((1 + p.beat * 0.022 + voc * 0.008) * 250) / 250;
-      const ty = Math.round((-p.beat * 2.5) * 10) / 10;
+      const sc = Math.round((1 + p.beat * 0.02 + voc * 0.008) * 160) / 160;
+      const ty = Math.round((-p.beat * 2.4) * 4) / 4;
       if (sc !== lastSc || ty !== lastTy) {
         lastSc = sc;
         lastTy = ty;
-        domPulseRef.current.style.transform = `translate3d(0, ${ty.toFixed(1)}px, 0) scale(${sc.toFixed(3)})`;
+        domPulseRef.current.style.transform = `translate3d(0, ${ty.toFixed(2)}px, 0) scale(${sc.toFixed(4)})`;
       }
     };
     rafId = requestAnimationFrame(tick);
@@ -522,20 +525,14 @@ export const LyricsStage: React.FC<LyricsStageProps> = React.memo(({
             })}
           </div>
 
-          <div className="relative w-52 h-[1px] bg-white/12">
+          <div className="relative w-52 h-[1px] bg-white/12 overflow-hidden">
             <div
-              className="h-full transition-all duration-200 ease-apple relative"
+              className="h-full w-full origin-left transition-transform duration-200 ease-apple will-change-transform"
               style={{
-                width: `${lineProgPct}%`,
+                transform: `scaleX(${(lineProgPct / 100).toFixed(3)})`,
                 background: `linear-gradient(90deg, transparent, ${primary}, ${accent})`,
-                boxShadow: `0 0 12px ${primary}`,
               }}
-            >
-              <span
-                className="absolute right-0 top-1/2 -translate-y-1/2 w-1.5 h-1.5 rotate-45"
-                style={{ backgroundColor: accent, boxShadow: `0 0 10px ${primary}` }}
-              />
-            </div>
+            />
           </div>
 
           <p className="font-serif-editorial italic text-xl sm:text-2xl text-white/18 min-h-[30px] transition-opacity duration-500">

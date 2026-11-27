@@ -7,6 +7,8 @@ import { LyricsStage } from '../src/components/LyricsStage.tsx';
 import { StudioPopover } from '../src/components/StudioPopover.tsx';
 import { LyricsTimelineDrawer } from '../src/components/LyricsTimelineDrawer.tsx';
 import { CompanionScreen } from '../src/components/CompanionScreen.tsx';
+import { LumnEdgeCanvas } from '../src/components/LumnEdgeCanvas.tsx';
+import { pickCardVariant } from '../src/components/AppleUiLyricsStage.tsx';
 import { VIBE_PRESETS } from '../src/data/presets.ts';
 import { presetToBlueprint } from '../src/engine/vibeBrain.ts';
 import type { LyricLine, LyricStyleId, SongItem } from '../src/types.ts';
@@ -458,4 +460,71 @@ test('StudioPopover, LyricsTimelineDrawer, and CompanionScreen render cleanly', 
 
   const companionHtml = renderToStaticMarkup(<CompanionScreen />);
   assert.ok(companionHtml.includes('AURA Companion Display'));
+  assert.ok(companionHtml.includes('data-aura-lumn-canvas="true"'));
+});
+
+test('Apple UI Reel choreography renders Apple Maps, Apple Cash, and GPU LumnEdgeCanvas cleanly', () => {
+  const baseBp = presetToBlueprint(VIBE_PRESETS[0]);
+
+  assert.equal(pickCardVariant(-1), 'imessage');
+  assert.equal(pickCardVariant(0), 'imessage');
+  assert.equal(pickCardVariant(1), 'apple_maps');
+  assert.equal(pickCardVariant(2), 'apple_pay');
+  assert.equal(pickCardVariant(3), 'apple_cash');
+  assert.equal(pickCardVariant(4), 'frosted_card');
+  assert.equal(pickCardVariant(5), 'apple_maps');
+  assert.equal(pickCardVariant(6), 'macos_pill');
+  assert.equal(pickCardVariant(7), 'apple_cash');
+
+  // Apple Maps x Apple Pay split card (line 1)
+  const mapsHtml = renderToStaticMarkup(
+    <LyricsStage
+      song={sampleSong}
+      lyrics={sampleLyrics}
+      lyricsLoading={false}
+      activeLineIdx={1}
+      activeWordIdx={2}
+      upcomingLineIdx={2}
+      secondsUntilNext={1}
+      phase="active"
+      blueprint={baseBp}
+      isPlaying={true}
+      visualIcons={true}
+      audioPulseRef={pulseRef}
+    />
+  );
+  assert.ok(mapsHtml.includes('Apple Maps'), 'Line 1 should render Apple Maps card');
+  assert.ok(mapsHtml.includes('Maps') && mapsHtml.includes('Pay'), 'Apple Maps card should include Maps & Pay badges');
+  assert.ok(mapsHtml.includes('Mad Love'), 'Apple Maps card should show album subtitle');
+
+  // Apple Cash black titanium card (line 3)
+  const cashHtml = renderToStaticMarkup(
+    <LyricsStage
+      song={sampleSong}
+      lyrics={sampleLyrics}
+      lyricsLoading={false}
+      activeLineIdx={3}
+      activeWordIdx={1}
+      upcomingLineIdx={4}
+      secondsUntilNext={1}
+      phase="active"
+      blueprint={baseBp}
+      isPlaying={true}
+      visualIcons={true}
+      audioPulseRef={pulseRef}
+    />
+  );
+  assert.ok(cashHtml.includes('Apple Cash'), 'Line 3 should render Apple Cash card');
+  assert.ok(cashHtml.includes('Cash'), 'Apple Cash card should show Cash mark');
+
+  // LumnEdgeCanvas renders canvas when active and null when off
+  const lumnOn = renderToStaticMarkup(
+    <LumnEdgeCanvas edgeStyle="lumn_vivid" palette={baseBp.palette} audioPulseRef={pulseRef} />
+  );
+  assert.ok(lumnOn.includes('data-aura-lumn-canvas="true"'));
+
+  const lumnOff = renderToStaticMarkup(
+    <LumnEdgeCanvas edgeStyle="off" palette={baseBp.palette} audioPulseRef={pulseRef} />
+  );
+  assert.equal(lumnOff, '');
 });

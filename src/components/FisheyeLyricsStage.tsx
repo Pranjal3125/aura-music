@@ -29,17 +29,20 @@ export const FisheyeLyricsStage: React.FC<FisheyeLyricsStageProps> = React.memo(
   useEffect(() => {
     let rafId = 0;
     let lastSc = -1;
-    const tick = () => {
+    let lastTickMs = 0;
+    const tick = (now: number) => {
       rafId = requestAnimationFrame(tick);
       if (document.hidden) return;
+      if (now - lastTickMs < 16) return;
+      lastTickMs = now;
       if (lensRef.current) {
         const p = audioPulseRef.current;
         const sub = p.subBass ?? p.bass;
         const voc = p.vocal ?? p.mid;
-        const sc = Math.round((1 + sub * 0.045 + p.beat * 0.038 + voc * 0.015) * 200) / 200;
+        const sc = Math.round((1 + sub * 0.045 + p.beat * 0.038 + voc * 0.015) * 160) / 160;
         if (sc !== lastSc) {
           lastSc = sc;
-          lensRef.current.style.transform = `translate3d(0,0,0) scale(${sc.toFixed(3)})`;
+          lensRef.current.style.transform = `translate3d(0,0,0) scale(${sc.toFixed(4)})`;
         }
       }
     };

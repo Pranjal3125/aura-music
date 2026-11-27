@@ -1,7 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Disc3, MonitorSmartphone, Pause, Play, SkipBack, SkipForward, Sparkles } from 'lucide-react';
-import type { CompanionCommandMessage, CompanionSyncMessage } from '../types';
+import { Disc3, MonitorSmartphone, Pause, Play, SkipBack, SkipForward } from 'lucide-react';
+import type { AudioPulseState, CompanionCommandMessage, CompanionSyncMessage } from '../types';
 import { ClickPulseOverlay } from './ClickPulseOverlay';
+import { LumnEdgeCanvas } from './LumnEdgeCanvas';
 
 export const COMPANION_SNAPSHOT_KEY = 'aura_companion_snapshot_v1';
 
@@ -29,6 +30,8 @@ function discreteKey(d: CompanionSyncMessage): string {
   ].join('|');
 }
 
+const DEFAULT_PALETTE = { primary: '#a855f7', secondary: '#e879f9', accent: '#f5f3ff' };
+
 export const CompanionScreen: React.FC = () => {
   const [sync, setSync] = useState<CompanionSyncMessage | null>(() => {
     try {
@@ -41,11 +44,6 @@ export const CompanionScreen: React.FC = () => {
   });
 
   const rootRef = useRef<HTMLDivElement | null>(null);
-  const edgeRimRef = useRef<HTMLDivElement | null>(null);
-  const edgeBeatRef = useRef<HTMLDivElement | null>(null);
-  const edgeBloomRef = useRef<HTMLDivElement | null>(null);
-  const edgeLaserRef = useRef<HTMLDivElement | null>(null);
-  const edgeOrbsRef = useRef<HTMLDivElement | null>(null);
   const artCardRef = useRef<HTMLDivElement | null>(null);
   const progressFillRef = useRef<HTMLDivElement | null>(null);
   const timeLabelRef = useRef<HTMLSpanElement | null>(null);
@@ -54,11 +52,27 @@ export const CompanionScreen: React.FC = () => {
   const lastDiscreteRef = useRef<string>(sync ? discreteKey(sync) : '');
   const channelRef = useRef<BroadcastChannel | null>(null);
 
+  const audioPulseRef = useRef<AudioPulseState>({
+    bass: sync?.bass ?? 0.12,
+    subBass: sync?.bass ?? 0.1,
+    beat: sync?.beat ?? 0,
+    mid: sync?.vocal ?? 0.1,
+    vocal: sync?.vocal ?? 0.1,
+    treble: 0.08,
+    energy: sync?.energy ?? 0.12,
+    beatPhase: 0,
+    lineProgress: 0,
+    wordProgress: 0,
+    isLiveFft: false,
+    spectrum: new Float32Array(32),
+  });
+
   // Live continuous targets driven by 120fps local rAF interpolation (ZERO 16Hz React re-renders)
   const liveTargetsRef = useRef({
     bass: sync?.bass ?? 0.1,
     beat: sync?.beat ?? 0,
     vocal: sync?.vocal ?? 0.1,
+    energy: sync?.energy ?? 0.1,
     currentTime: sync?.currentTime ?? 0,
     duration: sync?.song.duration ?? 0,
     isPlaying: sync?.isPlaying ?? false,
@@ -107,6 +121,7 @@ export const CompanionScreen: React.FC = () => {
       liveTargetsRef.current.bass = d.bass;
       liveTargetsRef.current.beat = d.beat;
       liveTargetsRef.current.vocal = d.vocal ?? d.bass;
+      liveTargetsRef.current.energy = d.energy ?? d.bass;
       liveTargetsRef.current.currentTime = d.currentTime;
       liveTargetsRef.current.duration = d.song.duration;
       liveTargetsRef.current.isPlaying = d.isPlaying;
@@ -121,10 +136,10 @@ export const CompanionScreen: React.FC = () => {
 
     let rafId = 0;
     let prevNow = performance.now();
-    let sBass = liveTargetsRef.current.bass;
-    let sBeat = liveTargetsRef.current.beat;
-    let sVocal = liveTargetsRef.current.vocal;
     let lastTimeStr = '';
+    let lastArtScale = -1;
+    let lastProgScale = -1;
+    let lastDomTick = 0;
 
     const tick = (now: number) => {
       rafId = requestAnimationFrame(tick);
@@ -136,34 +151,43 @@ export const CompanionScreen: React.FC = () => {
       prevNow = now;
 
       const tg = liveTargetsRef.current;
-      const atk = 1 - Math.exp(-18 * dt);
+      const ap = audioPulseRef.current;
+      const atk = 1 - Math.exp(-20 * dt);
       const rel = 1 - Math.exp(-6.5 * dt);
-      sBass += (tg.bass - sBass) * (tg.bass > sBass ? atk : rel);
-      sBeat += (tg.beat - sBeat) * (tg.beat > sBeat ? atk : rel);
-      sVocal += (tg.vocal - sVocal) * (tg.vocal > sVocal ? atk : rel);
+      ap.bass += (tg.bass - ap.bass) * (tg.bass > ap.bass ? atk : rel);
+      ap.subBass = ap.bass;
+      ap.beat += (tg.beat - ap.beat) * (tg.beat > ap.beat ? atk : rel);
+      ap.vocal += (tg.vocal - ap.vocal) * (tg.vocal > ap.vocal ? atk : rel);
+      ap.mid = ap.vocal;
+      ap.energy += (tg.energy - ap.energy) * (tg.energy > ap.energy ? atk : rel);
+      ap.treble = Math.min(1, ap.vocal * 0.65 + ap.beat * 0.35);
 
-      const glow = Math.min(1, 0.36 + sBass * 0.56 + sBeat * 0.24);
-      const bloom = Math.min(0.95, 0.16 + sBass * 0.48 + sBeat * 0.44);
-      const beatFlash = Math.min(0.9, sBeat * 0.78);
-      const rimOp = (0.52 + glow * 0.48).toFixed(2);
-      const orbOp = (0.34 + glow * 0.56).toFixed(2);
+      const tSec = now * 0.001;
+      for (let i = 0; i < 32; i++) {
+        const w = 0.55 + 0.45 * Math.sin(tSec * (2.6 + (i % 5) * 0.4) + i * 0.55);
+        ap.spectrum[i] = Math.min(1, (i < 10 ? ap.bass : ap.vocal) * w + ap.beat * 0.25);
+      }
 
-      if (edgeRimRef.current) edgeRimRef.current.style.opacity = rimOp;
-      if (edgeBeatRef.current) edgeBeatRef.current.style.opacity = beatFlash.toFixed(2);
-      if (edgeBloomRef.current) edgeBloomRef.current.style.opacity = bloom.toFixed(2);
-      if (edgeLaserRef.current) edgeLaserRef.current.style.opacity = rimOp;
-      if (edgeOrbsRef.current) edgeOrbsRef.current.style.opacity = orbOp;
+      if (now - lastDomTick < 24) return;
+      lastDomTick = now;
 
       if (artCardRef.current) {
-        const sc = tg.isPlaying ? 1 + sBeat * 0.032 + sVocal * 0.01 : 0.96;
-        artCardRef.current.style.transform = `translate3d(0,0,0) scale(${sc.toFixed(3)})`;
+        const sc = Math.round((tg.isPlaying ? 1 + ap.beat * 0.028 + ap.vocal * 0.01 : 0.96) * 150) / 150;
+        if (sc !== lastArtScale) {
+          lastArtScale = sc;
+          artCardRef.current.style.transform = `translate3d(0,0,0) scale(${sc.toFixed(3)})`;
+        }
       }
 
       if (tg.duration > 0) {
         const elapsedSinceMsg = tg.isPlaying ? Math.min(0.4, (now - tg.lastMsgMs) * 0.001) : 0;
         const estSec = Math.min(tg.duration, tg.currentTime + elapsedSinceMsg);
         if (progressFillRef.current) {
-          progressFillRef.current.style.transform = `scaleX(${Math.min(1, Math.max(0, estSec / tg.duration)).toFixed(4)})`;
+          const ratio = Math.round(Math.min(1, Math.max(0, estSec / tg.duration)) * 240) / 240;
+          if (ratio !== lastProgScale) {
+            lastProgScale = ratio;
+            progressFillRef.current.style.transform = `scaleX(${ratio.toFixed(4)})`;
+          }
         }
         if (timeLabelRef.current) {
           const formatted = fmt(estSec);
@@ -194,20 +218,14 @@ export const CompanionScreen: React.FC = () => {
         <div className="aura-oled-backdrop" />
         <ClickPulseOverlay />
         <div className="aura-edge-frame">
+          <LumnEdgeCanvas edgeStyle="lumn_vivid" palette={DEFAULT_PALETTE} audioPulseRef={audioPulseRef} />
           <div className="aura-edge-rim" />
-          <div className="aura-edge-bloom" />
-          <div className="aura-edge-orbs">
-            <div className="aura-edge-orb-h aura-orb-top" />
-            <div className="aura-edge-orb-h aura-orb-bottom" />
-            <div className="aura-edge-orb-v aura-orb-left" />
-            <div className="aura-edge-orb-v aura-orb-right" />
-          </div>
         </div>
-        <div className="relative z-10 oled-surface rounded-[32px] p-8 max-w-md space-y-3">
+        <div className="relative z-10 oled-surface rounded-[30px] p-8 max-w-md space-y-3 font-apple-sf">
           <MonitorSmartphone className="w-9 h-9 mx-auto text-purple-400" />
-          <h1 className="font-display text-xl font-bold text-white">AURA Companion Display</h1>
+          <h1 className="text-xl font-semibold text-white">AURA Companion Display</h1>
           <p className="text-xs text-white/55 leading-relaxed">
-            Move this window onto your laptop / second monitor — it mirrors the Reel&apos;s dark floating album-art card + synced Lumn neon edge aura automatically!
+            Move this window onto your laptop / second monitor — it mirrors the Reel&apos;s pure-OLED floating album cover + synced Lumn liquid edge light automatically.
           </p>
         </div>
       </div>
@@ -219,135 +237,114 @@ export const CompanionScreen: React.FC = () => {
   const initProgress = song.duration > 0 ? Math.min(1, Math.max(0, currentTime / song.duration)) : 0;
 
   return (
-    <div ref={rootRef} className="relative w-full h-full bg-black flex flex-col items-center justify-center overflow-hidden">
+    <div
+      ref={rootRef}
+      className="relative w-full h-full bg-black flex flex-col items-center justify-center overflow-hidden font-apple-sf select-none"
+    >
       <div className="aura-oled-backdrop" />
       <ClickPulseOverlay />
 
-      {/* Synced 120fps GPU Lumn Edge Frame (zero blur, pure pitch-black OLED center) */}
+      {/* Synced 120fps GPU WebGL2 Lumn Liquid Perimeter (matches Reel right MacBook Pro!) */}
       {blueprint.edgeStyle !== 'off' && (
-        <div
-          className="aura-edge-frame"
-          style={{ opacity: blueprint.edgeStyle === 'breathing_aura' ? 0.68 : 1 }}
-        >
-          <div ref={edgeRimRef} className="aura-edge-rim" />
-          <div ref={edgeBeatRef} className="aura-edge-beat-flash" />
-          <div ref={edgeBloomRef} className="aura-edge-bloom" />
-          {(blueprint.edgeStyle === 'laser_orbit' || blueprint.edgeStyle === 'violet_prism') && (
-            <div ref={edgeLaserRef} className="aura-edge-laser-ring" />
-          )}
-          {(blueprint.edgeStyle === 'lumn_vivid' ||
-            blueprint.edgeStyle === 'laser_orbit' ||
-            blueprint.edgeStyle === 'violet_prism') && (
-            <div ref={edgeOrbsRef} className="aura-edge-orbs">
-              <div className="aura-edge-orb-h aura-orb-top" />
-              <div className="aura-edge-orb-h aura-orb-bottom" />
-              <div className="aura-edge-orb-v aura-orb-left" />
-              <div className="aura-edge-orb-v aura-orb-right" />
-            </div>
-          )}
+        <div className="aura-edge-frame">
+          <LumnEdgeCanvas
+            edgeStyle={blueprint.edgeStyle}
+            palette={blueprint.palette}
+            audioPulseRef={audioPulseRef}
+          />
+          <div className="aura-edge-rim" />
         </div>
       )}
 
-      {/* Top Mood Pill */}
-      <div className="fixed top-4 left-1/2 -translate-x-1/2 z-30 oled-pill px-4 py-1.5 rounded-full flex items-center gap-2 text-[11px] font-mono-code text-white/80">
-        <Sparkles className="w-3 h-3" style={{ color: primary }} />
-        <span>{blueprint.moodName}</span>
-        {song.isFullTrack !== undefined && (
-          <span className="px-1.5 py-0.5 rounded bg-white/[0.08] text-[9px] text-white/60">
-            {song.isFullTrack ? 'FULL' : '30s'}
-          </span>
-        )}
-      </div>
+      {/* Reel-Identical Pure-OLED Freely Floating Album Art + Ambient Halo + Minimal macOS Dock */}
+      <div className="relative z-10 flex flex-col items-center max-w-[360px] w-[86vw] text-center px-4">
+        {/* Soft Circular Album Halo Bleeding Gently into Pitch Black (zero blur filter) */}
+        <div className="relative flex items-center justify-center mb-5">
+          <div
+            aria-hidden="true"
+            className="pointer-events-none absolute w-[320px] h-[320px] sm:w-[380px] sm:h-[380px] rounded-full"
+            style={{
+              background: `radial-gradient(circle, ${primary}38 0%, ${secondary}16 36%, transparent 68%)`,
+            }}
+          />
 
-      {/* Reel-Style Centered Dark Floating Album-Art Player Card (matches Reel Laptop Screen) */}
-      <div
-        className="group relative z-10 mt-8 rounded-[32px] p-6 sm:p-7 flex flex-col items-center max-w-sm w-[88vw] text-center border border-white/[0.12]"
-        style={{
-          background: 'linear-gradient(155deg, rgba(16,16,24,0.94) 0%, rgba(5,5,8,0.98) 100%)',
-          boxShadow: `0 34px 95px rgba(0,0,0,0.96), 0 0 54px ${primary}30, inset 0 1px 0 rgba(255,255,255,0.18)`,
-        }}
-      >
-        <div
-          ref={artCardRef}
-          className="relative mb-5 w-44 h-44 sm:w-52 sm:h-52 rounded-2xl overflow-hidden border border-white/20 will-change-transform"
-          style={{
-            boxShadow: `0 24px 65px rgba(0,0,0,0.92), 0 0 42px ${primary}48`,
-            transform: isPlaying ? 'translate3d(0,0,0) scale(1)' : 'translate3d(0,0,0) scale(0.96)',
-          }}
-        >
-          {song.artworkUrl ? (
-            <img src={song.artworkUrl} alt={song.title} className="w-full h-full object-cover" />
-          ) : (
-            <div className="w-full h-full bg-zinc-950 flex items-center justify-center">
-              <Disc3 className="w-14 h-14 text-white/25 animate-vinyl-spin" />
-            </div>
-          )}
-
-          {/* Subtle Hover / Focus Remote Transport Overlay */}
-          <div className="absolute inset-0 bg-black/55 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity duration-200 flex items-center justify-center gap-3">
-            <button
-              type="button"
-              onClick={() => sendCommand('prev')}
-              className="p-2.5 rounded-full bg-white/15 hover:bg-white/25 text-white cursor-pointer"
-              title="Previous track"
-            >
-              <SkipBack className="w-4 h-4" />
-            </button>
-            <button
-              type="button"
-              onClick={() => sendCommand('toggle_play')}
-              className="w-11 h-11 rounded-full flex items-center justify-center text-black cursor-pointer"
-              style={{ backgroundColor: primary, boxShadow: `0 0 22px ${primary}` }}
-              title="Play / Pause"
-            >
-              {isPlaying ? <Pause className="w-4 h-4 fill-current" /> : <Play className="w-4 h-4 fill-current ml-0.5" />}
-            </button>
-            <button
-              type="button"
-              onClick={() => sendCommand('next')}
-              className="p-2.5 rounded-full bg-white/15 hover:bg-white/25 text-white cursor-pointer"
-              title="Next track"
-            >
-              <SkipForward className="w-4 h-4" />
-            </button>
+          <div
+            ref={artCardRef}
+            className="relative w-52 h-52 sm:w-64 sm:h-64 rounded-[20px] overflow-hidden border border-white/[0.12] will-change-transform"
+            style={{
+              boxShadow: '0 28px 80px rgba(0,0,0,0.95)',
+              transform: isPlaying ? 'translate3d(0,0,0) scale(1)' : 'translate3d(0,0,0) scale(0.96)',
+            }}
+          >
+            {song.artworkUrl ? (
+              <img src={song.artworkUrl} alt={song.title} className="w-full h-full object-cover" />
+            ) : (
+              <div className="w-full h-full bg-zinc-950 flex items-center justify-center">
+                <Disc3 className="w-14 h-14 text-white/25 animate-vinyl-spin" />
+              </div>
+            )}
           </div>
         </div>
 
-        <h1 className="font-display text-2xl font-bold text-white tracking-tight truncate max-w-full">
+        {/* Clean Minimal Centered Song Title & Artist */}
+        <h1 className="text-lg sm:text-xl font-semibold text-white/95 tracking-tight truncate max-w-full">
           {song.title}
         </h1>
-        <p className="text-xs sm:text-sm text-white/55 mt-1 truncate max-w-full">{song.artist}</p>
+        <p className="text-xs sm:text-sm text-white/48 mt-0.5 truncate max-w-full">{song.artist}</p>
 
-        {/* Smooth 120fps GPU scaleX Progress Bar + Live Timestamps */}
-        <div className="w-full mt-5 space-y-1.5">
-          <div className="w-full h-1.5 rounded-full bg-white/12 overflow-hidden">
+        {/* Minimal Slim Progress Hairline */}
+        <div className="w-full max-w-[260px] mt-4 space-y-1.5">
+          <div className="w-full h-1 rounded-full bg-white/[0.12] overflow-hidden">
             <div
               ref={progressFillRef}
               className="h-full w-full rounded-full origin-left will-change-transform"
               style={{
                 transform: `scaleX(${initProgress.toFixed(4)})`,
-                background: `linear-gradient(90deg, ${primary}, ${secondary}, ${accent})`,
+                background: `linear-gradient(90deg, ${primary}, ${accent})`,
               }}
             />
           </div>
-          <div className="flex items-center justify-between text-[10px] font-mono-code text-white/40 tabular-nums">
+          <div className="flex items-center justify-between text-[10px] font-mono-code text-white/35 tabular-nums">
             <span ref={timeLabelRef}>{fmt(currentTime)}</span>
             <span>{fmt(song.duration)}</span>
           </div>
         </div>
 
-        {/* Synced Lyric Whisper */}
-        <div className="mt-4 min-h-[42px] flex flex-col items-center justify-center gap-1">
-          <p
-            className="text-xs sm:text-sm font-grotesk text-white/85 font-medium transition-opacity duration-300"
-            style={{ textShadow: `0 0 18px ${primary}88` }}
+        {/* Minimal macOS-Style Glass Media Transport Controls (matches Reel MacBook bottom controls!) */}
+        <div className="mt-4 flex items-center justify-center gap-3 px-4 py-2 rounded-full bg-white/[0.06] border border-white/[0.09]">
+          <button
+            type="button"
+            onClick={() => sendCommand('prev')}
+            className="p-2 rounded-full text-white/65 hover:text-white hover:bg-white/[0.1] cursor-pointer"
+            title="Previous track"
           >
+            <SkipBack className="w-4 h-4 fill-current" />
+          </button>
+          <button
+            type="button"
+            onClick={() => sendCommand('toggle_play')}
+            className="w-10 h-10 rounded-full flex items-center justify-center bg-white text-black hover:scale-105 cursor-pointer"
+            title="Play / Pause"
+          >
+            {isPlaying ? <Pause className="w-4 h-4 fill-current" /> : <Play className="w-4 h-4 fill-current ml-0.5" />}
+          </button>
+          <button
+            type="button"
+            onClick={() => sendCommand('next')}
+            className="p-2 rounded-full text-white/65 hover:text-white hover:bg-white/[0.1] cursor-pointer"
+            title="Next track"
+          >
+            <SkipForward className="w-4 h-4 fill-current" />
+          </button>
+        </div>
+
+        {/* Subtle Synced Lyric Whisper */}
+        <div className="mt-4 min-h-[36px] flex flex-col items-center justify-center gap-0.5 max-w-full">
+          <p className="text-xs sm:text-sm text-white/75 font-medium truncate max-w-full">
             {currentLineText || (isPlaying ? '♪' : 'Paused')}
           </p>
           {nextLineText && (
-            <p className="text-[11px] font-grotesk text-white/30 truncate max-w-full">
-              {nextLineText}
-            </p>
+            <p className="text-[11px] text-white/28 truncate max-w-full">{nextLineText}</p>
           )}
         </div>
       </div>
