@@ -2,11 +2,15 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  buildTimedLine,
   cleanTrackTitle,
   detectChorusStartTime,
+  detectPreviewSectionCues,
+  estimateTrackBpm,
   extractArtistList,
   fetchInfiniteRadioSongs,
   fetchSyncedLyricsDetailed,
+  getKnownPreviewOffset,
   launchRadioStation,
   loadFeaturedSongs,
   makeSongKey,
@@ -17,6 +21,7 @@ import {
   scoreTrackRelevance,
   searchRealSongs,
   setCustomSaavnBaseUrl,
+  upgradeToFullSaavnTrack,
 } from '../src/services/musicApi.ts';
 import { computeLyricCursor, getWordVisualIcon } from '../src/services/lyricSync.ts';
 import { loadUserSettings, PREFS_COOKIE_NAME, sanitizeSettings, saveUserSettings } from '../src/services/settingsStorage.ts';
@@ -449,12 +454,13 @@ test('musicApi makes zero dead-proxy/CORS-spam requests by default, rejects knoc
   }) as typeof fetch;
 
   try {
-    // 1. Default unconfigured mode: zero calls to dead Saavn/proxy domains!
-    const songs = await searchRealSongs('Tum Hi Ho');
-    assert.ok(songs.length >= 1);
-    assert.equal(songs[0].source, 'itunes');
-
+    // 1. Home featured load must NEVER burst saavn.sumit.co (zero 429 on page load)
     const featured = await loadFeaturedSongs();
+    assert.deepEqual(
+      requestedUrls.filter((u) => /saavn\.sumit\.co/i.test(u)),
+      [],
+      'loadFeaturedSongs must NOT burst public saavn.sumit.co by default'
+    );
     const husnCard = featured.find((s) => s.title === 'Husn');
     assert.ok(husnCard, 'Featured must resolve authentic Husn via IN regional fallback');
     assert.equal(husnCard.artist, 'Anuv Jain');
@@ -462,6 +468,10 @@ test('musicApi makes zero dead-proxy/CORS-spam requests by default, rejects knoc
       !featured.some((s) => /marshlemon|jain husn anuv/i.test(`${s.title} ${s.artist}`)),
       'Featured MUST reject Marshlemon knockoff'
     );
+
+    const songs = await searchRealSongs('Tum Hi Ho');
+    assert.ok(songs.length >= 1);
+    assert.equal(songs[0].source, 'itunes');
 
     const knockoffScore = scoreTrackRelevance(
       {
@@ -533,7 +543,25 @@ test('musicApi makes zero dead-proxy/CORS-spam requests by default, rejects knoc
     const husnSearch = await searchRealSongs('Husn Anuv Jain');
     assert.equal(husnSearch[0].artist, 'Anuv Jain');
 
-    // Featured matcher rejects Lo-Fi / Slowed / Live / short-duration knockoffs
+    // Featured matcher rejects Lo-Fi / Slowed / Live / Synthwave / short-duration knockoffs
+    assert.equal(
+      matchesFeaturedSpec(
+        {
+          id: 'synthwave',
+          title: 'Kesariya (Synthwave)',
+          artist: 'Pritam, Arijit Singh',
+          album: '',
+          duration: 30,
+          fullDuration: 240,
+          artworkUrl: '',
+          audioUrl: '',
+          source: 'itunes',
+          isFullTrack: false,
+        },
+        { expectedTitle: 'Kesariya', expectedArtists: ['Pritam', 'Arijit Singh'] }
+      ),
+      false
+    );
     assert.equal(
       matchesFeaturedSpec(
         {
@@ -581,12 +609,12 @@ test('musicApi makes zero dead-proxy/CORS-spam requests by default, rejects knoc
     const station = await launchRadioStation('Electronic Synthwave');
     assert.ok(station.length >= 1);
 
-    // Assert NO dead/rate-limited Saavn mirrors or CORS proxies were ever called
-    const deadPattern = /saavn\.sumit\.co|saavn\.dev|jiosaavn-api|corsproxy\.io|allorigins\.win|cors\.lol|proxy\.cors\.dev/i;
+    // Assert NO dead Saavn mirrors or failing CORS proxies were ever called
+    const deadPattern = /saavn\.dev|jiosaavn-api|corsproxy\.io|allorigins\.win|cors\.lol|proxy\.cors\.dev/i;
     assert.deepEqual(
       requestedUrls.filter((u) => deadPattern.test(u)),
       [],
-      'Must NOT call dead Saavn mirrors or failing CORS proxies by default'
+      'Must NOT call dead Saavn mirrors or failing CORS proxies'
     );
 
     // 2. Optional custom Saavn endpoint works when explicitly configured
@@ -594,6 +622,196 @@ test('musicApi makes zero dead-proxy/CORS-spam requests by default, rejects knoc
     const saavnSongs = await searchRealSongs('Tum Hi Ho');
     assert.equal(saavnSongs[0].source, 'saavn');
     assert.equal(saavnSongs[0].isFullTrack, true);
+  } finally {
+    resetSaavnClientStateForTests();
+    globalThis.fetch = origFetch;
+  }
+});
+
+test('getKnownPreviewOffset and upgradeToFullSaavnTrack deliver exact sync and reject sped-up/karaoke junk', async () => {
+  // Audio-verified exact iTunes 30s preview offsets
+  assert.equal(
+    getKnownPreviewOffset({
+      id: 'itunes-1444609119',
+      title: 'No Lie (feat. Dua Lipa)',
+      artist: 'Sean Paul',
+      source: 'itunes',
+      isFullTrack: false,
+    }),
+    47.0
+  );
+  assert.equal(
+    getKnownPreviewOffset({
+      id: 'itunes-1440870375',
+      title: 'Starboy (feat. Daft Punk)',
+      artist: 'The Weeknd',
+      source: 'itunes',
+      isFullTrack: false,
+    }),
+    45.0
+  );
+  assert.equal(
+    getKnownPreviewOffset({
+      id: 'itunes-1653219849',
+      title: 'Apna Bana Le (From "Bhediya")',
+      artist: 'Arijit Singh',
+      source: 'itunes',
+      isFullTrack: false,
+    }),
+    0.0
+  );
+  assert.equal(
+    getKnownPreviewOffset({
+      id: 'itunes-999999999',
+      title: 'Tum Hi Ho',
+      artist: 'Mithoon, Arijit Singh',
+      source: 'itunes',
+      isFullTrack: false,
+    }),
+    29.5
+  );
+  // Full tracks must return null (start at 0:00 naturally)
+  assert.equal(
+    getKnownPreviewOffset({
+      id: 'itunes-1635014240',
+      title: 'Kesariya',
+      artist: 'Pritam, Arijit Singh',
+      source: 'saavn',
+      isFullTrack: true,
+    }),
+    null
+  );
+
+  // On-demand full-track upgrade verification
+  const origFetch = globalThis.fetch;
+  resetSaavnClientStateForTests();
+  setCustomSaavnBaseUrl('https://mock-saavn.example/api');
+
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.includes('Kesariya')) {
+      return new Response(
+        JSON.stringify({
+          success: true,
+          data: {
+            results: [
+              {
+                id: 'sv-kes',
+                name: 'Kesariya (From "Brahmastra")',
+                duration: 268,
+                playCount: 99000000,
+                album: { name: 'Brahmastra' },
+                artists: { primary: [{ name: 'Pritam' }, { name: 'Arijit Singh' }] },
+                image: [{ quality: '500x500', url: 'https://img.example/kes.jpg' }],
+                downloadUrl: [{ quality: '320kbps', url: 'https://aac.saavncdn.com/kesariya_320.mp4' }],
+              },
+            ],
+          },
+        }),
+        { status: 200 }
+      );
+    }
+    if (url.includes('No%20Lie')) {
+      return new Response(
+        JSON.stringify({
+          success: true,
+          data: {
+            results: [
+              {
+                id: 'sv-sped',
+                name: 'No Lie (Sped Up)',
+                duration: 176,
+                playCount: 500000,
+                album: { name: 'Sped Up Hits' },
+                artists: { primary: [{ name: 'Sean Paul' }] },
+                downloadUrl: [{ quality: '320kbps', url: 'https://aac.saavncdn.com/nolie_sped.mp4' }],
+              },
+            ],
+          },
+        }),
+        { status: 200 }
+      );
+    }
+    if (url.includes('Starboy')) {
+      return new Response(
+        JSON.stringify({
+          success: true,
+          data: {
+            results: [
+              {
+                id: 'sv-kar',
+                name: 'Starboy (Originally Perfomed By The Weeknd) (Melody Karaoke Version)',
+                duration: 225,
+                playCount: 200000,
+                album: { name: 'Karaoke Hits' },
+                artists: { primary: [{ name: 'Karaoke Band' }] },
+                downloadUrl: [{ quality: '320kbps', url: 'https://aac.saavncdn.com/starboy_kar.mp4' }],
+              },
+            ],
+          },
+        }),
+        { status: 200 }
+      );
+    }
+    return new Response(JSON.stringify({ success: true, data: { results: [] } }), { status: 200 });
+  }) as typeof fetch;
+
+  try {
+    const kesariyaPreview: SongItem = {
+      id: 'itunes-1635014240',
+      title: 'Kesariya (From "Brahmastra")',
+      artist: 'Pritam, Arijit Singh',
+      album: 'Brahmastra',
+      duration: 30,
+      fullDuration: 268,
+      artworkUrl: 'https://art.example/kes.jpg',
+      audioUrl: 'https://audio-ssl.itunes.apple.com/kes.m4a',
+      source: 'itunes',
+      isFullTrack: false,
+    };
+    const upgraded = await upgradeToFullSaavnTrack(kesariyaPreview);
+    assert.ok(upgraded, 'Must upgrade authentic Kesariya to 320kbps full track');
+    assert.equal(upgraded.id, 'itunes-1635014240', 'Must preserve song ID for queue/ref stability');
+    assert.equal(upgraded.isFullTrack, true);
+    assert.equal(upgraded.source, 'saavn');
+    assert.equal(upgraded.duration, 268);
+    assert.equal(upgraded.audioUrl, 'https://aac.saavncdn.com/kesariya_320.mp4');
+
+    const noLiePreview: SongItem = {
+      id: 'itunes-1444609119',
+      title: 'No Lie (feat. Dua Lipa)',
+      artist: 'Sean Paul',
+      album: 'Mad Love',
+      duration: 30,
+      fullDuration: 221,
+      artworkUrl: '',
+      audioUrl: 'https://audio-ssl.itunes.apple.com/nolie.m4a',
+      source: 'itunes',
+      isFullTrack: false,
+    };
+    assert.equal(
+      await upgradeToFullSaavnTrack(noLiePreview),
+      null,
+      'Must reject No Lie (Sped Up) with wrong duration'
+    );
+
+    const starboyPreview: SongItem = {
+      id: 'itunes-1440870375',
+      title: 'Starboy (feat. Daft Punk)',
+      artist: 'The Weeknd',
+      album: 'Starboy',
+      duration: 30,
+      fullDuration: 230,
+      artworkUrl: '',
+      audioUrl: 'https://audio-ssl.itunes.apple.com/starboy.m4a',
+      source: 'itunes',
+      isFullTrack: false,
+    };
+    assert.equal(
+      await upgradeToFullSaavnTrack(starboyPreview),
+      null,
+      'Must reject Starboy Melody Karaoke (Originally Perfomed typo)'
+    );
   } finally {
     resetSaavnClientStateForTests();
     globalThis.fetch = origFetch;
@@ -762,5 +980,177 @@ test('fetchSyncedLyricsDetailed uses /api/search first without speculative /api/
     );
   } finally {
     globalThis.fetch = origFetch;
+  }
+});
+
+test('parseLrc handles [offset:ms], credit stripping, rapid non-overlapping lines, and snappy short hooks', () => {
+  assert.deepEqual(parseLrc(''), []);
+  assert.deepEqual(parseLrc('no timestamps at all'), []);
+
+  const raw = [
+    '[offset:-500]',
+    '[00:01.00] Lyrics by: Test Writer',
+    '[00:10.00] No lie',
+    '[00:10.45] Shake that',
+    '[00:12.00] Feel your eyes they all over me',
+  ].join('\n');
+
+  const lines = parseLrc(raw, 220);
+  assert.equal(lines.length, 3);
+  assert.equal(lines[0].text, 'No lie');
+  // [offset:-500] shifts timestamps +0.5s -> 10.50 and 10.95
+  assert.ok(Math.abs(lines[0].start - 10.5) < 0.01);
+  assert.ok(Math.abs(lines[1].start - 10.95) < 0.01);
+  assert.ok(lines[0].end < lines[1].start, `Rapid lines must not overlap: ${lines[0].end} vs ${lines[1].start}`);
+
+  // Short 2-word hook ("No lie") with wide 4s gap should sweep briskly (~0.94s), not drag to 2s+
+  const hook = buildTimedLine(50, 54, 'No lie');
+  assert.equal(hook.words.length, 2);
+  const hookSpan = hook.words[1].end - hook.words[0].start;
+  assert.ok(hookSpan > 0.7 && hookSpan < 1.3, `Expected snappy short-hook cadence, got ${hookSpan}s`);
+});
+
+test('scoreLrcCandidate rejects alternate versions and penalizes truncated LRCs', () => {
+  const song: SongItem = {
+    id: 'it-nolie',
+    title: 'No Lie (feat. Dua Lipa)',
+    artist: 'Sean Paul',
+    album: 'Mad Love',
+    duration: 30,
+    fullDuration: 221,
+    artworkUrl: '',
+    audioUrl: '',
+    source: 'itunes',
+    isFullTrack: false,
+  };
+
+  const fullOriginal = {
+    trackName: 'No Lie',
+    artistName: 'Sean Paul, Dua Lipa',
+    duration: 221,
+    syncedLyrics: '[00:12.00] Feel your eyes\n[00:50.00] No lie\n[03:20.00] No lie tonight',
+  };
+  const remixCut = {
+    trackName: 'No Lie (Club Mix Remix)',
+    artistName: 'Sean Paul, Dua Lipa',
+    duration: 221,
+    syncedLyrics: '[00:12.00] Feel your eyes\n[00:50.00] No lie\n[03:20.00] No lie tonight',
+  };
+  const truncatedCut = {
+    trackName: 'No Lie',
+    artistName: 'Sean Paul, Dua Lipa',
+    duration: 221,
+    syncedLyrics: '[00:12.00] Feel your eyes\n[00:35.00] No lie',
+  };
+
+  const sOrig = scoreLrcCandidate(fullOriginal, song, 'No Lie', ['Sean Paul', 'Dua Lipa']);
+  const sRemix = scoreLrcCandidate(remixCut, song, 'No Lie', ['Sean Paul', 'Dua Lipa']);
+  const sTrunc = scoreLrcCandidate(truncatedCut, song, 'No Lie', ['Sean Paul', 'Dua Lipa']);
+  assert.ok(sOrig > sRemix + 150, `Original (${sOrig}) must beat remix (${sRemix})`);
+  assert.ok(sOrig > sTrunc + 60, `Full LRC (${sOrig}) must beat truncated snippet (${sTrunc})`);
+});
+
+test('computeLyricCursor returns continuous lineProgress/wordProgress and guards edge inputs', () => {
+  const empty = computeLyricCursor([], 10, 0);
+  assert.equal(empty.phase, 'none');
+  assert.equal(empty.lineProgress, 0);
+  assert.equal(empty.wordProgress, 0);
+
+  const lines: LyricLine[] = [
+    {
+      start: 10,
+      end: 14,
+      text: 'Zero dur',
+      words: [
+        { text: 'Zero', start: 10, end: 10 }, // degenerate zero-length word
+        { text: 'dur', start: 12, end: 14 },
+      ],
+    },
+  ];
+  const nanCursor = computeLyricCursor(lines, Number.NaN, Number.NaN);
+  assert.equal(nanCursor.phase, 'intro');
+  assert.equal(nanCursor.lineProgress, 0);
+
+  const midCursor = computeLyricCursor(lines, 12.86, 0); // +0.14 => 13.0 -> 75% of line, 50% of word 1
+  assert.equal(midCursor.phase, 'active');
+  assert.equal(midCursor.activeWordIdx, 1);
+  assert.ok(midCursor.lineProgress >= 0.7 && midCursor.lineProgress <= 0.8);
+  assert.ok(midCursor.wordProgress >= 0.45 && midCursor.wordProgress <= 0.55);
+});
+
+test('detectPreviewSectionCues and estimateTrackBpm produce bounded cues and realistic tempos', () => {
+  const sample: LyricLine[] = [
+    { start: 12, end: 16, text: 'First verse begins slowly', words: [] },
+    { start: 16, end: 20, text: 'Second verse keeps flowing', words: [] },
+    { start: 20, end: 24, text: 'Third verse builds tension', words: [] },
+    { start: 24, end: 28, text: 'Fourth line leads into hook', words: [] },
+    { start: 52, end: 56, text: 'Shining under neon lights', words: [] },
+    { start: 112, end: 116, text: 'Shining under neon lights', words: [] },
+    { start: 170, end: 175, text: 'Final refrain fades out', words: [] },
+  ];
+  const cues = detectPreviewSectionCues(sample, 210);
+  assert.ok(cues.some((c) => c.label === 'Start' && c.offsetSec === 0));
+  assert.ok(cues.some((c) => c.label === 'Chorus' && c.offsetSec === 52));
+  assert.deepEqual(detectPreviewSectionCues([], 200), []);
+
+  assert.equal(estimateTrackBpm({ title: 'No Lie (feat. Dua Lipa)', artist: 'Sean Paul' }, []), 102);
+  assert.equal(estimateTrackBpm({ title: 'Kesariya', artist: 'Arijit Singh' }, []), 94);
+  const inferred = estimateTrackBpm({ title: 'Unknown Indie Track', artist: 'Someone' }, sample);
+  assert.ok(inferred >= 82 && inferred <= 136, `Expected inferred BPM in 82..136, got ${inferred}`);
+});
+
+test('LightAudioEngine BPM groove & vocal impulse engine reacts to playback clock and settles on pause', async () => {
+  class ClockMockAudio {
+    crossOrigin: string | null = null;
+    preload = '';
+    src = '';
+    volume = 1;
+    currentTime = 0;
+    paused = true;
+    ended = false;
+    duration = 30;
+    addEventListener() {}
+    removeAttribute(name: string) {
+      if (name === 'src') this.src = '';
+    }
+    async play() {
+      this.paused = false;
+    }
+    pause() {
+      this.paused = true;
+    }
+  }
+
+  const prevAudio = (globalThis as Record<string, unknown>).Audio;
+  const prevWin = (globalThis as Record<string, unknown>).window;
+  (globalThis as Record<string, unknown>).Audio = ClockMockAudio;
+  (globalThis as Record<string, unknown>).window = {};
+
+  try {
+    const engine = new LightAudioEngine({ volume: 0.5 });
+    engine.setTrackBpm(120); // 2 beats/sec -> beat every 0.5s
+    await engine.loadAndPlay('https://audio-ssl.itunes.apple.com/preview.m4a');
+
+    // On downbeat (t = 0.0) + vocal impulse -> high beat & vocal energy
+    engine.notifyVocalImpulse(1.0, true);
+    const hit = engine.samplePulse(0.016);
+    assert.equal(hit.isLiveFft, false);
+    assert.ok(hit.beat > 0.2, `Expected positive beat on downbeat, got ${hit.beat}`);
+    assert.ok(hit.vocal > 0.2, `Expected positive vocal after impulse, got ${hit.vocal}`);
+    assert.equal(hit.spectrum.length, 32);
+    assert.ok(hit.subBass >= 0 && hit.subBass <= 1);
+    assert.ok(hit.treble >= 0 && hit.treble <= 1);
+
+    // Pause -> settles smoothly downward
+    engine.pause();
+    let settled = hit;
+    for (let i = 0; i < 40; i++) {
+      settled = engine.samplePulse(0.03);
+    }
+    assert.ok(settled.beat < 0.05, `Expected beat to decay near 0 on pause, got ${settled.beat}`);
+    engine.dispose();
+  } finally {
+    (globalThis as Record<string, unknown>).Audio = prevAudio;
+    (globalThis as Record<string, unknown>).window = prevWin;
   }
 });

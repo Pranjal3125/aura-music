@@ -25,9 +25,11 @@ import {
   Repeat1,
   Radio,
   Shuffle,
+  Crosshair,
 } from 'lucide-react';
 import type {
   AmbientParticleId,
+  AudioPulseState,
   CompanionCommandMessage,
   CompanionSyncMessage,
   EdgeStyleId,
@@ -42,14 +44,19 @@ import { EQ_PRESETS, VIBE_PRESETS } from './data/presets';
 import {
   cleanTrackTitle,
   detectChorusStartTime,
+  estimateTrackBpm,
   extractPaletteFromArtwork,
   fetchInfiniteRadioSongs,
   fetchItunesSongs,
   fetchSyncedLyricsDetailed,
+  getCustomSaavnBaseUrl,
+  getKnownPreviewOffset,
   launchRadioStation,
   loadFeaturedSongs,
   makeSongKey,
   parseLocalFileName,
+  setCustomSaavnBaseUrl,
+  upgradeToFullSaavnTrack,
 } from './services/musicApi';
 import { loadUserSettings, saveUserSettings, type EqBands } from './services/settingsStorage';
 import { computeLyricCursor, type LyricPhase } from './services/lyricSync';
@@ -84,20 +91,21 @@ function rgbToHex(rgb: [number, number, number]): string {
   return '#' + [clamp(rgb[0]), clamp(rgb[1]), clamp(rgb[2])].map((x) => x.toString(16).padStart(2, '0')).join('');
 }
 
-function loadSavedOffset(songId: string): number | null {
+function loadSavedOffset(songId: string, isFullTrack: boolean): number | null {
   try {
-    const map = JSON.parse(localStorage.getItem('aura_lyric_offsets_v1') || '{}') as Record<string, number>;
-    return typeof map[songId] === 'number' ? map[songId] : null;
+    const map = JSON.parse(localStorage.getItem('aura_lyric_offsets_v2') || '{}') as Record<string, number>;
+    const key = `${isFullTrack ? 'full' : 'prev'}:${songId}`;
+    return typeof map[key] === 'number' ? map[key] : null;
   } catch {
     return null;
   }
 }
 
-function saveOffset(songId: string, offset: number): void {
+function saveOffset(songId: string, isFullTrack: boolean, offset: number): void {
   try {
-    const map = JSON.parse(localStorage.getItem('aura_lyric_offsets_v1') || '{}') as Record<string, number>;
-    map[songId] = offset;
-    localStorage.setItem('aura_lyric_offsets_v1', JSON.stringify(map));
+    const map = JSON.parse(localStorage.getItem('aura_lyric_offsets_v2') || '{}') as Record<string, number>;
+    map[`${isFullTrack ? 'full' : 'prev'}:${songId}`] = offset;
+    localStorage.setItem('aura_lyric_offsets_v2', JSON.stringify(map));
   } catch {
     // ignore
   }
@@ -189,6 +197,7 @@ const AuraStage: React.FC = () => {
   const [secondsUntilNext, setSecondsUntilNext] = useState(0);
   const [lyricPhase, setLyricPhase] = useState<LyricPhase>('none');
   const [lyricOffset, setLyricOffset] = useState(0);
+  const [isSyncLocked, setIsSyncLocked] = useState(false);
 
   const [blueprint, setBlueprint] = useState<VibeBlueprint>(() => buildInitialBlueprint(initialPrefs));
   const [activePresetId, setActivePresetId] = useState<string>(() => initialPrefs.presetId ?? 'verci-lumn');
@@ -198,6 +207,8 @@ const AuraStage: React.FC = () => {
   const [geminiKey, setGeminiKey] = useState(() => localStorage.getItem('aura_gemini_key') || '');
   const [keyDraft, setKeyDraft] = useState(() => localStorage.getItem('aura_gemini_key') || '');
   const [keySaved, setKeySaved] = useState(false);
+  const [saavnUrlDraft, setSaavnUrlDraft] = useState(() => getCustomSaavnBaseUrl() || '');
+  const [saavnUrlSaved, setSaavnUrlSaved] = useState(false);
   const [isDirecting, setIsDirecting] = useState(false);
   const [vibePanelOpen, setVibePanelOpen] = useState(false);
   const [lyricsDrawerOpen, setLyricsDrawerOpen] = useState(false);
@@ -215,13 +226,30 @@ const AuraStage: React.FC = () => {
   const [isDragging, setIsDragging] = useState(false);
 
   const rootRef = useRef<HTMLDivElement | null>(null);
+  const edgeRimRef = useRef<HTMLDivElement | null>(null);
+  const edgeBeatRef = useRef<HTMLDivElement | null>(null);
+  const edgeBloomRef = useRef<HTMLDivElement | null>(null);
+  const edgeLaserRef = useRef<HTMLDivElement | null>(null);
+  const edgeOrbsRef = useRef<HTMLDivElement | null>(null);
   const seekFillRef = useRef<HTMLDivElement | null>(null);
   const timeLabelRef = useRef<HTMLSpanElement | null>(null);
+  const lastWakeMsRef = useRef(0);
+  const chromeVisibleRef = useRef(true);
+  chromeVisibleRef.current = chromeVisible;
+  const companionLastSeenRef = useRef(0);
   const audioRef = useRef<LightAudioEngine | null>(null);
-  const audioPulseRef = useRef({
+  const audioPulseRef = useRef<AudioPulseState>({
     bass: 0.1,
+    subBass: 0.08,
     beat: 0,
     mid: 0.1,
+    vocal: 0.08,
+    treble: 0.06,
+    energy: 0.08,
+    beatPhase: 0,
+    lineProgress: 0,
+    wordProgress: 0,
+    isLiveFft: false,
     spectrum: new Float32Array(32),
   });
   const channelRef = useRef<BroadcastChannel | null>(null);
@@ -418,23 +446,52 @@ const AuraStage: React.FC = () => {
       setLyricPhase('none');
       setLyricsLoading(true);
       setLyricOffset(0);
+      setIsSyncLocked(false);
 
-      const prepPromise = Promise.all([
-        extractPaletteFromArtwork(song.artworkUrl),
-        fetchSyncedLyricsDetailed(song),
-      ]);
+      // Launch lyrics, artwork extraction, and optional full-track 320kbps upgrade independently!
+      const palettePromise = extractPaletteFromArtwork(song.artworkUrl);
+      const lyricsPromise = fetchSyncedLyricsDetailed(song);
+
+      let effectiveSong = song;
+      let upgradedToFull = false;
+      if (!song.isFullTrack && song.source === 'itunes') {
+        const upgrade = await Promise.race<SongItem | null>([
+          upgradeToFullSaavnTrack(song),
+          new Promise<null>((resolve) => window.setTimeout(() => resolve(null), 2200)),
+        ]);
+        if (activeSongIdRef.current !== song.id) return;
+        if (upgrade) {
+          effectiveSong = upgrade;
+          upgradedToFull = true;
+          setActiveSong(effectiveSong);
+          setDuration(effectiveSong.duration);
+          setQueue((prev) => prev.map((item) => (item.id === song.id ? effectiveSong : item)));
+          setFeatured((prev) => prev.map((item) => (item.id === song.id ? effectiveSong : item)));
+        }
+      }
 
       const engine = audioRef.current;
-      let effectiveSong = song;
       if (engine) {
         try {
-          await engine.loadAndPlay(song.audioUrl);
+          await engine.loadAndPlay(effectiveSong.audioUrl);
         } catch (err) {
           if (activeSongIdRef.current !== song.id) return;
           const isAutoplay = err instanceof DOMException && err.name === 'NotAllowedError';
           if (isAutoplay) {
             showToast('Click Play to start audio.');
-          } else if (song.source === 'saavn' || song.source === 'audius') {
+          } else if (upgradedToFull && song.audioUrl) {
+            // Upgraded 320kbps stream unavailable -> fall back immediately to original iTunes preview
+            effectiveSong = song;
+            upgradedToFull = false;
+            setActiveSong(effectiveSong);
+            setDuration(effectiveSong.duration);
+            try {
+              await engine.loadAndPlay(effectiveSong.audioUrl);
+              showToast('Playing calibrated 30s preview');
+            } catch {
+              showToast(`Audio stream unavailable for "${song.title}".`);
+            }
+          } else if (effectiveSong.source === 'saavn' || effectiveSong.source === 'audius') {
             // Stream CDN failed -> fall back seamlessly to iTunes 30s preview for this song!
             const cleanTitle = cleanTrackTitle(song.title);
             const fallbackHits = await fetchItunesSongs(`${cleanTitle} ${song.artist}`.trim());
@@ -469,16 +526,17 @@ const AuraStage: React.FC = () => {
         const curIdx = activeQueue.findIndex((s) => s.id === song.id);
         const remaining = curIdx < 0 ? 0 : activeQueue.length - 1 - curIdx;
         if (remaining <= 2) {
-          void replenishRadio(song, activeQueue);
+          void replenishRadio(effectiveSong, activeQueue);
         }
       }
 
-      const [artworkPalette, lrcResult] = await prepPromise;
+      const lrcResult = await lyricsPromise;
 
       // Guard against stale async result if user skipped rapidly
       if (activeSongIdRef.current !== song.id) return;
 
       const fetchedLyrics = lrcResult.lines;
+      audioRef.current?.setTrackBpm(estimateTrackBpm(effectiveSong, fetchedLyrics));
       setLyrics(fetchedLyrics);
       setLyricMatchSource(lrcResult.matchSource);
       setMatchedTrackInfo(
@@ -488,15 +546,30 @@ const AuraStage: React.FC = () => {
       );
       setLyricsLoading(false);
 
-      const saved = loadSavedOffset(effectiveSong.id);
+      const saved = loadSavedOffset(effectiveSong.id, effectiveSong.isFullTrack);
       let initialOffset = 0;
       if (saved !== null) {
         initialOffset = saved;
-      } else if (!effectiveSong.isFullTrack && fetchedLyrics.length > 0) {
-        // Smart Chorus Sync: start 30s previews directly on the vocal hook without overlapping the screen!
-        initialOffset = detectChorusStartTime(fetchedLyrics, effectiveSong.fullDuration);
-        if (initialOffset > 0) {
-          showToast(`30s Preview · Auto-synced at ${fmtTime(initialOffset)} (press L to adjust)`);
+        setIsSyncLocked(true);
+      } else if (effectiveSong.isFullTrack) {
+        initialOffset = 0;
+        setIsSyncLocked(true);
+        if (upgradedToFull && fetchedLyrics.length > 0) {
+          showToast('Full 320kbps Audio · Exact 0:00 Lyric Sync');
+        }
+      } else if (fetchedLyrics.length > 0) {
+        const calibrated = getKnownPreviewOffset(effectiveSong);
+        if (calibrated !== null) {
+          initialOffset = calibrated;
+          setIsSyncLocked(true);
+          showToast(`30s Preview · Studio-calibrated sync at ${fmtTime(calibrated)}`);
+        } else {
+          // Smart Chorus Sync: estimate 30s preview hook offset & surface 1-click Tap-to-Sync if clip starts elsewhere
+          initialOffset = detectChorusStartTime(fetchedLyrics, effectiveSong.fullDuration);
+          setIsSyncLocked(false);
+          if (initialOffset > 0) {
+            showToast(`30s Preview · Auto-synced at ${fmtTime(initialOffset)} (press L to tap-sync)`);
+          }
         }
       }
       setLyricOffset(initialOffset);
@@ -512,6 +585,9 @@ const AuraStage: React.FC = () => {
         setSecondsUntilNext(initCursor.secondsUntilNext);
         setLyricPhase(initCursor.phase);
       }
+
+      const artworkPalette = await palettePromise;
+      if (activeSongIdRef.current !== song.id) return;
 
       const applyLatestVisualPrefs = (bp: VibeBlueprint): VibeBlueprint => {
         const latestPrefs = loadUserSettings();
@@ -572,13 +648,38 @@ const AuraStage: React.FC = () => {
       );
       setLyricsLoading(false);
       if (res.lines.length > 0) {
-        if (!activeSong.isFullTrack) {
-          const chorusSec = detectChorusStartTime(res.lines, activeSong.fullDuration);
-          setLyricOffset(chorusSec);
+        audioRef.current?.setTrackBpm(estimateTrackBpm(activeSong, res.lines));
+        const isLive = activeSong.source === 'live_tab' || activeSong.source === 'live_mic';
+        let nextOffset = 0;
+        if (isLive) {
+          audioRef.current?.resetLiveClock();
+          nextOffset = 0;
+          setIsSyncLocked(false);
+        } else if (!activeSong.isFullTrack) {
+          const calibrated = getKnownPreviewOffset(activeSong);
+          if (calibrated !== null) {
+            nextOffset = calibrated;
+            setIsSyncLocked(true);
+          } else {
+            nextOffset = detectChorusStartTime(res.lines, activeSong.fullDuration);
+            setIsSyncLocked(false);
+          }
         } else {
-          setLyricOffset(0);
+          nextOffset = 0;
+          setIsSyncLocked(true);
         }
-        showToast(`Matched lyrics: ${res.matchedTrack || customQuery}`);
+        setLyricOffset(nextOffset);
+        const cur = computeLyricCursor(res.lines, audioRef.current?.getCurrentTime() || 0, nextOffset);
+        setActiveLineIdx(cur.activeLineIdx);
+        setActiveWordIdx(cur.activeWordIdx);
+        setUpcomingLineIdx(cur.upcomingLineIdx);
+        setSecondsUntilNext(cur.secondsUntilNext);
+        setLyricPhase(cur.phase);
+        showToast(
+          isLive
+            ? `Loaded "${res.matchedTrack || customQuery}" — tap the line you hear to lock live sync!`
+            : `Matched lyrics: ${res.matchedTrack || customQuery}`
+        );
       } else {
         showToast('No lyrics found for that search.');
       }
@@ -640,19 +741,45 @@ const AuraStage: React.FC = () => {
     (file: File) => {
       const url = URL.createObjectURL(file);
       const parsed = parseLocalFileName(file.name);
-      const localSong: SongItem = {
-        id: `local-${Date.now()}`,
-        title: parsed.title,
-        artist: parsed.artist,
-        album: 'Local Audio',
-        duration: 200,
-        artworkUrl: '',
-        audioUrl: url,
-        source: 'local',
-        isFullTrack: true,
-      };
-      void playSong(localSong, [localSong, ...queue]);
-      showToast(`Loaded "${parsed.title}"`);
+      // Probe real audio duration before querying LRCLIB so duration-matching never gets penalized by a fake guess
+      const probeDuration = new Promise<number>((resolve) => {
+        const probe = new Audio();
+        let done = false;
+        const finish = (dur: number) => {
+          if (done) return;
+          done = true;
+          probe.src = '';
+          resolve(Number.isFinite(dur) && dur > 10 ? Math.round(dur) : 0);
+        };
+        const timer = window.setTimeout(() => finish(0), 1400);
+        probe.preload = 'metadata';
+        probe.onloadedmetadata = () => {
+          window.clearTimeout(timer);
+          finish(probe.duration);
+        };
+        probe.onerror = () => {
+          window.clearTimeout(timer);
+          finish(0);
+        };
+        probe.src = url;
+      });
+
+      void probeDuration.then((realDur) => {
+        const localSong: SongItem = {
+          id: `local-${Date.now()}`,
+          title: parsed.title,
+          artist: parsed.artist,
+          album: 'Local Audio',
+          duration: realDur,
+          fullDuration: realDur > 40 ? realDur : undefined,
+          artworkUrl: '',
+          audioUrl: url,
+          source: 'local',
+          isFullTrack: true,
+        };
+        void playSong(localSong, [localSong, ...queue]);
+        showToast(`Loaded "${parsed.title}" (Full Track · Exact 0:00 Sync)`);
+      });
     },
     [playSong, queue, showToast]
   );
@@ -692,7 +819,7 @@ const AuraStage: React.FC = () => {
     [showToast]
   );
 
-  // Unified 120fps rAF loop + Bidirectional Companion Channel
+  // Unified 120fps rAF loop + Leaf-Ref GPU Lumn Edge Lighting + Smart Companion Sync
   useEffect(() => {
     const bootPrefs = loadUserSettings();
     const startupVol = bootPrefs.muted ? 0 : (bootPrefs.volume ?? 0.85);
@@ -719,7 +846,12 @@ const AuraStage: React.FC = () => {
     const channel = new BroadcastChannel('aura-vibe-sync');
     channelRef.current = channel;
     channel.onmessage = (ev: MessageEvent<CompanionCommandMessage>) => {
+      if (ev.data?.type === 'COMPANION_HELLO') {
+        companionLastSeenRef.current = performance.now();
+        return;
+      }
       if (ev.data?.type !== 'CMD') return;
+      companionLastSeenRef.current = performance.now();
       if (ev.data.action === 'toggle_play') audioRef.current?.togglePlay();
       else if (ev.data.action === 'prev') void playAdjacentRef.current(-1);
       else if (ev.data.action === 'next') void playAdjacentRef.current(1);
@@ -728,8 +860,27 @@ const AuraStage: React.FC = () => {
     const bootBp = buildInitialBlueprint(bootPrefs);
     const curP: [number, number, number] = hexToRgb(bootBp.palette.primary);
     const curS: [number, number, number] = hexToRgb(bootBp.palette.secondary);
-    let smoothGlowAlpha = 0.45;
-    let smoothPulseAlpha = 0.2;
+    let lastAppliedPrimary = bootBp.palette.primary;
+    let lastAppliedSecondary = bootBp.palette.secondary;
+    let lastAppliedAccent = bootBp.palette.accent;
+    if (rootRef.current) {
+      rootRef.current.style.setProperty('--aura-primary', lastAppliedPrimary);
+      rootRef.current.style.setProperty('--aura-secondary', lastAppliedSecondary);
+      rootRef.current.style.setProperty('--aura-accent', lastAppliedAccent);
+    }
+
+    let smoothGlowAlpha = 0.42;
+    let smoothBloomAlpha = 0.22;
+    let smoothBeatFlash = 0;
+
+    let lastRimOp = '';
+    let lastBeatOp = '';
+    let lastBloomOp = '';
+    let lastOrbOp = '';
+    let lastSeekScale = -1;
+    let lastTimeStr = '';
+    let lastCountdownInt = -1;
+    let lastDiscreteSyncKey = '';
 
     let prevNow = performance.now();
     let lastCompanionMs = 0;
@@ -738,51 +889,108 @@ const AuraStage: React.FC = () => {
     let rafId = 0;
 
     const tick = (now: number) => {
+      rafId = requestAnimationFrame(tick);
+      if (document.hidden) {
+        prevNow = now;
+        return;
+      }
       const dt = Math.min(0.05, Math.max(0.001, (now - prevNow) * 0.001));
       prevNow = now;
 
       const s = rafStateRef.current;
-      const rawPulse = engine.samplePulse();
+      const rawPulse = engine.samplePulse(dt);
 
-      const atk = 1 - Math.exp(-16 * dt);
-      const rel = 1 - Math.exp(-4.2 * dt);
+      const atk = 1 - Math.exp(-22 * dt);
+      const rel = 1 - Math.exp(-6.2 * dt);
       const ap = audioPulseRef.current;
       ap.bass += (rawPulse.bass - ap.bass) * (rawPulse.bass > ap.bass ? atk : rel);
+      ap.subBass += (rawPulse.subBass - ap.subBass) * (rawPulse.subBass > ap.subBass ? atk : rel);
       ap.beat += (rawPulse.beat - ap.beat) * (rawPulse.beat > ap.beat ? atk : rel);
       ap.mid += (rawPulse.mid - ap.mid) * (rawPulse.mid > ap.mid ? atk : rel);
+      ap.vocal += (rawPulse.vocal - ap.vocal) * (rawPulse.vocal > ap.vocal ? atk : rel);
+      ap.treble += (rawPulse.treble - ap.treble) * (rawPulse.treble > ap.treble ? atk : rel);
+      ap.energy += (rawPulse.energy - ap.energy) * (rawPulse.energy > ap.energy ? atk : rel);
+      ap.beatPhase = rawPulse.beatPhase;
+      ap.isLiveFft = rawPulse.isLiveFft;
       ap.spectrum = rawPulse.spectrum;
 
-      const targetGlow = Math.min(1, 0.28 + ap.bass * 0.58 + ap.beat * 0.32);
-      const targetPulse = Math.min(0.96, 0.18 + ap.bass * 0.55 + ap.beat * 0.42);
-      smoothGlowAlpha += (targetGlow - smoothGlowAlpha) * (1 - Math.exp(-8 * dt));
-      smoothPulseAlpha += (targetPulse - smoothPulseAlpha) * (1 - Math.exp(-9 * dt));
+      // Zero-repaint Lumn perimeter edge lighting driven strictly via leaf GPU opacity refs
+      const targetGlow = Math.min(1, 0.34 + ap.subBass * 0.44 + ap.beat * 0.34 + ap.vocal * 0.14);
+      const targetBloom = Math.min(0.92, 0.15 + ap.bass * 0.44 + ap.beat * 0.42);
+      const targetBeatFlash = Math.min(0.9, ap.beat * 0.82);
 
+      smoothGlowAlpha += (targetGlow - smoothGlowAlpha) * (1 - Math.exp(-12 * dt));
+      smoothBloomAlpha += (targetBloom - smoothBloomAlpha) * (1 - Math.exp(-14 * dt));
+      smoothBeatFlash += (targetBeatFlash - smoothBeatFlash) * (targetBeatFlash > smoothBeatFlash ? 1 - Math.exp(-32 * dt) : 1 - Math.exp(-10 * dt));
+
+      const rimOp = (0.5 + smoothGlowAlpha * 0.5).toFixed(2);
+      const beatOp = smoothBeatFlash.toFixed(2);
+      const bloomOp = smoothBloomAlpha.toFixed(2);
+      const orbOp = (0.3 + smoothGlowAlpha * 0.58).toFixed(2);
+
+      if (rimOp !== lastRimOp) {
+        lastRimOp = rimOp;
+        if (edgeRimRef.current) edgeRimRef.current.style.opacity = rimOp;
+        if (edgeLaserRef.current) edgeLaserRef.current.style.opacity = rimOp;
+      }
+      if (beatOp !== lastBeatOp) {
+        lastBeatOp = beatOp;
+        if (edgeBeatRef.current) edgeBeatRef.current.style.opacity = beatOp;
+      }
+      if (bloomOp !== lastBloomOp) {
+        lastBloomOp = bloomOp;
+        if (edgeBloomRef.current) edgeBloomRef.current.style.opacity = bloomOp;
+      }
+      if (orbOp !== lastOrbOp) {
+        lastOrbOp = orbOp;
+        if (edgeOrbsRef.current) edgeOrbsRef.current.style.opacity = orbOp;
+      }
+
+      // Smoothly transition root CSS palette ONLY while changing, then stop touching rootRef!
       const root = rootRef.current;
-      if (root) {
-        root.style.setProperty('--aura-glow-alpha', smoothGlowAlpha.toFixed(3));
-        root.style.setProperty('--aura-pulse-alpha', smoothPulseAlpha.toFixed(3));
-        root.style.setProperty(
-          '--aura-edge-opacity',
-          s.blueprint.edgeStyle === 'off' ? '0' : s.blueprint.edgeStyle === 'breathing_aura' ? '0.68' : '1'
-        );
-
-        if (now - lastCssColorMs > 32) {
-          lastCssColorMs = now;
-          const tP = hexToRgb(s.blueprint.palette.primary);
-          const tS = hexToRgb(s.blueprint.palette.secondary);
-          const cStep = 1 - Math.exp(-4.5 * 0.032);
-          let changed = false;
-          for (let c = 0; c < 3; c++) {
-            const dP = tP[c] - curP[c];
-            const dS = tS[c] - curS[c];
-            if (Math.abs(dP) > 0.4) { curP[c] += dP * cStep; changed = true; }
-            if (Math.abs(dS) > 0.4) { curS[c] += dS * cStep; changed = true; }
+      if (
+        root &&
+        (lastAppliedPrimary !== s.blueprint.palette.primary ||
+          lastAppliedSecondary !== s.blueprint.palette.secondary ||
+          lastAppliedAccent !== s.blueprint.palette.accent) &&
+        now - lastCssColorMs > 40
+      ) {
+        lastCssColorMs = now;
+        const tP = hexToRgb(s.blueprint.palette.primary);
+        const tS = hexToRgb(s.blueprint.palette.secondary);
+        const cStep = 1 - Math.exp(-8.5 * 0.04);
+        let settledP = true;
+        let settledS = true;
+        for (let c = 0; c < 3; c++) {
+          const dP = tP[c] - curP[c];
+          const dS = tS[c] - curS[c];
+          if (Math.abs(dP) > 1.2) {
+            curP[c] += dP * cStep;
+            settledP = false;
+          } else {
+            curP[c] = tP[c];
           }
-          if (changed) {
-            root.style.setProperty('--aura-primary', rgbToHex(curP));
-            root.style.setProperty('--aura-secondary', rgbToHex(curS));
-            root.style.setProperty('--aura-accent', s.blueprint.palette.accent);
+          if (Math.abs(dS) > 1.2) {
+            curS[c] += dS * cStep;
+            settledS = false;
+          } else {
+            curS[c] = tS[c];
           }
+        }
+        const nextP = settledP ? s.blueprint.palette.primary : rgbToHex(curP);
+        const nextS = settledS ? s.blueprint.palette.secondary : rgbToHex(curS);
+        const nextA = s.blueprint.palette.accent;
+        if (nextP !== lastAppliedPrimary) {
+          lastAppliedPrimary = nextP;
+          root.style.setProperty('--aura-primary', nextP);
+        }
+        if (nextS !== lastAppliedSecondary) {
+          lastAppliedSecondary = nextS;
+          root.style.setProperty('--aura-secondary', nextS);
+        }
+        if (nextA !== lastAppliedAccent) {
+          lastAppliedAccent = nextA;
+          root.style.setProperty('--aura-accent', nextA);
         }
       }
 
@@ -790,66 +998,124 @@ const AuraStage: React.FC = () => {
       const durSec = engine.getDuration() || s.activeSong?.duration || 0;
 
       if (seekFillRef.current && durSec > 0) {
-        seekFillRef.current.style.width = `${Math.min(100, (curSec / durSec) * 100).toFixed(2)}%`;
+        const ratio = Math.round(Math.min(1, Math.max(0, curSec / durSec)) * 400) / 400;
+        if (ratio !== lastSeekScale) {
+          lastSeekScale = ratio;
+          seekFillRef.current.style.transform = `scaleX(${ratio.toFixed(4)})`;
+        }
       }
       if (timeLabelRef.current) {
-        timeLabelRef.current.textContent = fmtTime(curSec);
-      }
-
-      if (s.lyrics.length > 0) {
-        const cursor = computeLyricCursor(s.lyrics, curSec, s.lyricOffset);
-        if (cursor.activeLineIdx !== s.activeLineIdx) setActiveLineIdx(cursor.activeLineIdx);
-        if (cursor.activeWordIdx !== s.activeWordIdx) setActiveWordIdx(cursor.activeWordIdx);
-        if (cursor.upcomingLineIdx !== s.upcomingLineIdx) setUpcomingLineIdx(cursor.upcomingLineIdx);
-        if (cursor.phase !== s.lyricPhase) setLyricPhase(cursor.phase);
-        setSecondsUntilNext((prev) =>
-          Math.abs(prev - cursor.secondsUntilNext) > 0.35 ? cursor.secondsUntilNext : prev
-        );
-      }
-
-      if (s.activeSong && now - lastCompanionMs > 60) {
-        lastCompanionMs = now;
-        const msg: CompanionSyncMessage = {
-          type: 'STATE_SYNC',
-          song: {
-            id: s.activeSong.id,
-            title: s.activeSong.title,
-            artist: s.activeSong.artist,
-            album: s.activeSong.album,
-            artworkUrl: s.activeSong.artworkUrl,
-            duration: durSec,
-            isFullTrack: s.activeSong.isFullTrack,
-            source: s.activeSong.source,
-          },
-          blueprint: s.blueprint,
-          currentTime: curSec,
-          isPlaying: engine.isPlaying(),
-          currentLineText:
-            s.activeLineIdx >= 0
-              ? s.lyrics[s.activeLineIdx]?.text || ''
-              : s.upcomingLineIdx >= 0
-                ? s.lyrics[s.upcomingLineIdx]?.text || ''
-                : '',
-          nextLineText:
-            s.activeLineIdx >= 0 && s.activeLineIdx + 1 < s.lyrics.length
-              ? s.lyrics[s.activeLineIdx + 1]?.text
-              : undefined,
-          bass: ap.bass,
-          beat: ap.beat,
-          timestamp: Date.now(),
-        };
-        channel.postMessage(msg);
-        if (now - lastSnapshotMs > 480) {
-          lastSnapshotMs = now;
-          try {
-            localStorage.setItem(COMPANION_SNAPSHOT_KEY, JSON.stringify(msg));
-          } catch {
-            // ignore
-          }
+        const formatted = fmtTime(curSec);
+        if (formatted !== lastTimeStr) {
+          lastTimeStr = formatted;
+          timeLabelRef.current.textContent = formatted;
         }
       }
 
-      rafId = requestAnimationFrame(tick);
+      let curLineIdx = s.activeLineIdx;
+      let curUpIdx = s.upcomingLineIdx;
+
+      if (s.lyrics.length > 0) {
+        const cursor = computeLyricCursor(s.lyrics, curSec, s.lyricOffset);
+        ap.lineProgress = cursor.lineProgress;
+        ap.wordProgress = cursor.wordProgress;
+
+        const lineChanged = cursor.activeLineIdx !== s.activeLineIdx;
+        const wordChanged = cursor.activeWordIdx !== s.activeWordIdx;
+        if ((lineChanged || wordChanged) && cursor.activeLineIdx >= 0 && engine.isPlaying()) {
+          engine.notifyVocalImpulse(lineChanged ? 0.95 : 0.65, lineChanged);
+        }
+
+        if (lineChanged) {
+          curLineIdx = cursor.activeLineIdx;
+          rafStateRef.current.activeLineIdx = cursor.activeLineIdx;
+          setActiveLineIdx(cursor.activeLineIdx);
+        }
+        if (wordChanged) {
+          rafStateRef.current.activeWordIdx = cursor.activeWordIdx;
+          setActiveWordIdx(cursor.activeWordIdx);
+        }
+        if (cursor.upcomingLineIdx !== s.upcomingLineIdx) {
+          curUpIdx = cursor.upcomingLineIdx;
+          rafStateRef.current.upcomingLineIdx = cursor.upcomingLineIdx;
+          setUpcomingLineIdx(cursor.upcomingLineIdx);
+        }
+        if (cursor.phase !== s.lyricPhase) {
+          rafStateRef.current.lyricPhase = cursor.phase;
+          setLyricPhase(cursor.phase);
+        }
+        if (cursor.phase === 'intro' || cursor.phase === 'interlude') {
+          const ceilSec = Math.max(0, Math.ceil(cursor.secondsUntilNext));
+          if (ceilSec !== lastCountdownInt) {
+            lastCountdownInt = ceilSec;
+            setSecondsUntilNext(ceilSec);
+          }
+        } else if (lastCountdownInt !== 0) {
+          lastCountdownInt = 0;
+          setSecondsUntilNext(0);
+        }
+      } else {
+        ap.lineProgress = 0;
+        ap.wordProgress = 0;
+      }
+
+      if (s.activeSong) {
+        const playingNow = engine.isPlaying();
+        const curText =
+          curLineIdx >= 0
+            ? s.lyrics[curLineIdx]?.text || ''
+            : curUpIdx >= 0
+              ? s.lyrics[curUpIdx]?.text || ''
+              : '';
+        const nextText =
+          curLineIdx >= 0 && curLineIdx + 1 < s.lyrics.length
+            ? s.lyrics[curLineIdx + 1]?.text
+            : undefined;
+        const discreteKey = `${s.activeSong.id}|${playingNow ? 1 : 0}|${curText}|${s.blueprint.moodName}|${s.blueprint.edgeStyle}|${s.blueprint.palette.primary}`;
+        const discreteChanged = discreteKey !== lastDiscreteSyncKey;
+        const companionActive = now - companionLastSeenRef.current < 8500;
+        const shouldBroadcast = discreteChanged || (companionActive && now - lastCompanionMs > 55);
+        const shouldSnapshot = discreteChanged || (now - lastSnapshotMs > 2500 && playingNow);
+
+        if (shouldBroadcast || shouldSnapshot) {
+          const msg: CompanionSyncMessage = {
+            type: 'STATE_SYNC',
+            song: {
+              id: s.activeSong.id,
+              title: s.activeSong.title,
+              artist: s.activeSong.artist,
+              album: s.activeSong.album,
+              artworkUrl: s.activeSong.artworkUrl,
+              duration: durSec,
+              isFullTrack: s.activeSong.isFullTrack,
+              source: s.activeSong.source,
+            },
+            blueprint: s.blueprint,
+            currentTime: curSec,
+            isPlaying: playingNow,
+            currentLineText: curText,
+            nextLineText: nextText,
+            bass: ap.bass,
+            beat: ap.beat,
+            vocal: ap.vocal,
+            energy: ap.energy,
+            timestamp: Date.now(),
+          };
+          if (shouldBroadcast) {
+            lastCompanionMs = now;
+            channel.postMessage(msg);
+          }
+          if (shouldSnapshot) {
+            lastDiscreteSyncKey = discreteKey;
+            lastSnapshotMs = now;
+            try {
+              localStorage.setItem(COMPANION_SNAPSHOT_KEY, JSON.stringify(msg));
+            } catch {
+              // ignore
+            }
+          }
+        }
+      }
     };
 
     rafId = requestAnimationFrame(tick);
@@ -1019,7 +1285,10 @@ const AuraStage: React.FC = () => {
 
   const wakeChrome = useCallback(() => {
     if (pureCinema) return;
-    setChromeVisible(true);
+    const now = performance.now();
+    if (chromeVisibleRef.current && now - lastWakeMsRef.current < 260) return;
+    lastWakeMsRef.current = now;
+    if (!chromeVisibleRef.current) setChromeVisible(true);
     if (hideTimerRef.current) window.clearTimeout(hideTimerRef.current);
     if (activeSong && isPlaying && !vibePanelOpen && !lyricsDrawerOpen && !searchOpen) {
       hideTimerRef.current = window.setTimeout(() => {
@@ -1037,6 +1306,7 @@ const AuraStage: React.FC = () => {
       setChromeVisible(true);
       if (hideTimerRef.current) window.clearTimeout(hideTimerRef.current);
     } else {
+      lastWakeMsRef.current = 0;
       wakeChrome();
     }
   }, [activeSong, isPlaying, vibePanelOpen, lyricsDrawerOpen, searchOpen, pureCinema, wakeChrome]);
@@ -1047,12 +1317,110 @@ const AuraStage: React.FC = () => {
   }, []);
 
   const openCompanion = useCallback(() => {
+    companionLastSeenRef.current = performance.now();
     window.open(
       `${window.location.origin}${window.location.pathname}?mode=companion`,
       'aura_companion',
       'width=760,height=640'
     );
   }, []);
+
+  const applySyncedOffset = useCallback(
+    (nextOffset: number, toastMsg?: string, markLocked = true) => {
+      const rounded = Math.round(nextOffset * 20) / 20;
+      rafStateRef.current.lyricOffset = rounded;
+      setLyricOffset(rounded);
+      if (markLocked) setIsSyncLocked(true);
+      const song = rafStateRef.current.activeSong;
+      if (song) saveOffset(song.id, song.isFullTrack, rounded);
+      const curLyrics = rafStateRef.current.lyrics;
+      if (curLyrics.length > 0) {
+        const cur = computeLyricCursor(curLyrics, audioRef.current?.getCurrentTime() || 0, rounded);
+        rafStateRef.current.activeLineIdx = cur.activeLineIdx;
+        rafStateRef.current.activeWordIdx = cur.activeWordIdx;
+        rafStateRef.current.upcomingLineIdx = cur.upcomingLineIdx;
+        rafStateRef.current.lyricPhase = cur.phase;
+        setActiveLineIdx(cur.activeLineIdx);
+        setActiveWordIdx(cur.activeWordIdx);
+        setUpcomingLineIdx(cur.upcomingLineIdx);
+        setSecondsUntilNext(Math.ceil(cur.secondsUntilNext));
+        setLyricPhase(cur.phase);
+      }
+      if (toastMsg) showToast(toastMsg);
+    },
+    [showToast]
+  );
+
+  const handleCloseLyricsDrawer = useCallback(() => setLyricsDrawerOpen(false), []);
+  const handleOpenLyricsSearch = useCallback(() => setLyricsDrawerOpen(true), []);
+  const handleJumpToTime = useCallback((sec: number) => audioRef.current?.seek(sec), []);
+  const handleToggleInfiniteRadio = useCallback(() => {
+    setInfiniteRadio((prev) => {
+      const next = !prev;
+      saveUserSettings({ infiniteRadio: next });
+      showToast(next ? 'Infinite Radio Autoplay ON' : 'Loop Queue Mode');
+      return next;
+    });
+  }, [showToast]);
+  const handleSeekToLine = useCallback(
+    (sec: number) => {
+      audioRef.current?.seek(sec);
+      applySyncedOffset(0, undefined, true);
+    },
+    [applySyncedOffset]
+  );
+  const handleSyncLineHere = useCallback(
+    (lineStartSec: number) => {
+      const cur = audioRef.current?.getCurrentTime() || 0;
+      const next = Math.round((lineStartSec - cur) * 20) / 20;
+      applySyncedOffset(next, `Locked sync (${next >= 0 ? `+${next.toFixed(1)}s` : `${next.toFixed(1)}s`})!`, true);
+    },
+    [applySyncedOffset]
+  );
+  const handleAdjustOffset = useCallback(
+    (delta: number) => {
+      const next = Math.round((rafStateRef.current.lyricOffset + delta) * 20) / 20;
+      applySyncedOffset(next, undefined, true);
+    },
+    [applySyncedOffset]
+  );
+  const handleSetExactOffset = useCallback(
+    (offsetSec: number) => {
+      applySyncedOffset(offsetSec, `Jumped sync to ${fmtTime(offsetSec)}`, true);
+    },
+    [applySyncedOffset]
+  );
+  const handleResetOffset = useCallback(() => {
+    applySyncedOffset(0, 'Sync offset reset to 0.0s', false);
+  }, [applySyncedOffset]);
+  const handleReplayTrack = useCallback(() => {
+    audioRef.current?.seek(0);
+    audioRef.current?.play();
+    showToast('Replaying track with locked sync');
+  }, [showToast]);
+  const handlePlayFromQueue = useCallback(
+    (s: SongItem) => {
+      void playSong(s, rafStateRef.current.queue);
+    },
+    [playSong]
+  );
+  const handleRemoveFromQueue = useCallback((id: string) => {
+    setQueue((prev) => prev.filter((item) => item.id !== id));
+  }, []);
+  const handleManualLyricsSearch = useCallback(
+    (q: string) => {
+      void handleManualSearchLyrics(q);
+    },
+    [handleManualSearchLyrics]
+  );
+  const handleCloseStudio = useCallback(() => setVibePanelOpen(false), []);
+  const handleSaveSaavnUrl = useCallback(() => {
+    const savedUrl = setCustomSaavnBaseUrl(saavnUrlDraft);
+    setSaavnUrlDraft(savedUrl || '');
+    setSaavnUrlSaved(true);
+    window.setTimeout(() => setSaavnUrlSaved(false), 1600);
+    showToast(savedUrl ? 'Full-Track API saved! Search or reload for 320kbps full tracks.' : 'Cleared custom Full-Track API.');
+  }, [saavnUrlDraft, showToast]);
 
   useEffect(() => {
     const onFs = () => setIsFullscreen(Boolean(document.fullscreenElement));
@@ -1075,27 +1443,21 @@ const AuraStage: React.FC = () => {
         setPureCinema((v) => !v);
       } else if (e.key === 'l' || e.key === 'L') {
         setLyricsDrawerOpen((v) => !v);
-      } else if (e.key === '[' && activeSong) {
-        setLyricOffset((v) => {
-          const next = Math.round((v - 0.5) * 10) / 10;
-          saveOffset(activeSong.id, next);
-          showToast(`Sync: ${next >= 0 ? `+${next}s` : `${next}s`}`);
-          return next;
-        });
-      } else if (e.key === ']' && activeSong) {
-        setLyricOffset((v) => {
-          const next = Math.round((v + 0.5) * 10) / 10;
-          saveOffset(activeSong.id, next);
-          showToast(`Sync: ${next >= 0 ? `+${next}s` : `${next}s`}`);
-          return next;
-        });
+      } else if ((e.key === '[' || e.key === '{') && activeSong) {
+        const delta = e.shiftKey ? -5 : -0.5;
+        const next = Math.round((rafStateRef.current.lyricOffset + delta) * 20) / 20;
+        applySyncedOffset(next, `Sync: ${next >= 0 ? `+${next.toFixed(1)}s` : `${next.toFixed(1)}s`}`, true);
+      } else if ((e.key === ']' || e.key === '}') && activeSong) {
+        const delta = e.shiftKey ? 5 : 0.5;
+        const next = Math.round((rafStateRef.current.lyricOffset + delta) * 20) / 20;
+        applySyncedOffset(next, `Sync: ${next >= 0 ? `+${next.toFixed(1)}s` : `${next.toFixed(1)}s`}`, true);
       } else if (e.key === 'Escape' && pureCinema) {
         setPureCinema(false);
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [activeSong, toggleFullscreen, openCompanion, pureCinema, showToast]);
+  }, [activeSong, toggleFullscreen, openCompanion, pureCinema, applySyncedOffset]);
 
   const primary = blueprint.palette.primary;
   const usesCanvasWorld =
@@ -1133,9 +1495,8 @@ const AuraStage: React.FC = () => {
         if (f) handleLocalFile(f);
       }}
     >
-      {/* Pure OLED Center Ambient Wash + Anti-Banding Film Micro-Grain + Global 120fps Click Pulse */}
+      {/* Pure OLED Center Ambient Wash + Global 120fps Click Pulse */}
       <div className="aura-oled-backdrop" />
-      <div className="aura-film-grain" />
       <ClickPulseOverlay />
 
       {focusRemaining !== null && (
@@ -1155,23 +1516,27 @@ const AuraStage: React.FC = () => {
         />
       )}
 
-      {/* Zero-Repaint 120fps Lumn-Grade OLED Perimeter Edge Lighting */}
+      {/* Zero-Repaint 120fps Lumn-Grade OLED Perimeter Edge Lighting (direct GPU leaf refs) */}
       {blueprint.edgeStyle !== 'off' && (
-        <div className="aura-edge-frame">
-          <div className="aura-edge-rim" />
-          <div className="aura-edge-bloom" />
+        <div
+          className="aura-edge-frame"
+          style={{ opacity: blueprint.edgeStyle === 'breathing_aura' ? 0.68 : 1 }}
+        >
+          <div ref={edgeRimRef} className="aura-edge-rim" />
+          <div ref={edgeBeatRef} className="aura-edge-beat-flash" />
+          <div ref={edgeBloomRef} className="aura-edge-bloom" />
           {(blueprint.edgeStyle === 'laser_orbit' || blueprint.edgeStyle === 'violet_prism') && (
-            <div className="aura-edge-laser-ring" />
+            <div ref={edgeLaserRef} className="aura-edge-laser-ring" />
           )}
           {(blueprint.edgeStyle === 'lumn_vivid' ||
             blueprint.edgeStyle === 'laser_orbit' ||
             blueprint.edgeStyle === 'violet_prism') && (
-            <>
+            <div ref={edgeOrbsRef} className="aura-edge-orbs">
               <div className="aura-edge-orb-h aura-orb-top" />
               <div className="aura-edge-orb-h aura-orb-bottom" />
               <div className="aura-edge-orb-v aura-orb-left" />
               <div className="aura-edge-orb-v aura-orb-right" />
-            </>
+            </div>
           )}
         </div>
       )}
@@ -1537,7 +1902,7 @@ const AuraStage: React.FC = () => {
           {/* Left Interactive Lyrics Timeline + Manual Match + Tap-to-Sync + Queue Drawer */}
           <LyricsTimelineDrawer
             open={lyricsDrawerOpen && !pureCinema}
-            onClose={() => setLyricsDrawerOpen(false)}
+            onClose={handleCloseLyricsDrawer}
             song={activeSong}
             lyrics={lyrics}
             lyricsLoading={lyricsLoading}
@@ -1545,45 +1910,21 @@ const AuraStage: React.FC = () => {
             matchedTrackInfo={matchedTrackInfo}
             activeLineIdx={activeLineIdx}
             lyricOffset={lyricOffset}
-            currentTime={audioRef.current?.getCurrentTime() || 0}
             accentColor={primary}
             queue={queue}
             infiniteRadio={infiniteRadio}
             radioLoading={radioLoading}
-            onToggleInfiniteRadio={() => {
-              const next = !infiniteRadio;
-              setInfiniteRadio(next);
-              saveUserSettings({ infiniteRadio: next });
-              showToast(next ? 'Infinite Radio Autoplay ON' : 'Loop Queue Mode');
-            }}
-            onSeekToLine={(sec) => {
-              audioRef.current?.seek(sec);
-              setLyricOffset(0);
-              saveOffset(activeSong.id, 0);
-            }}
-            onSyncLineHere={(lineStartSec) => {
-              const cur = audioRef.current?.getCurrentTime() || 0;
-              const next = Math.round((lineStartSec - cur) * 10) / 10;
-              setLyricOffset(next);
-              saveOffset(activeSong.id, next);
-              showToast(`Locked sync (${next >= 0 ? `+${next}s` : `${next}s`})!`);
-            }}
-            onAdjustOffset={(d) =>
-              setLyricOffset((v) => {
-                const next = Math.round((v + d) * 10) / 10;
-                saveOffset(activeSong.id, next);
-                return next;
-              })
-            }
-            onResetOffset={() => {
-              setLyricOffset(0);
-              saveOffset(activeSong.id, 0);
-            }}
-            onManualSearchLyrics={(q) => void handleManualSearchLyrics(q)}
-            onPlayFromQueue={(s) => void playSong(s, queue)}
-            onRemoveFromQueue={(id) => {
-              setQueue((prev) => prev.filter((item) => item.id !== id));
-            }}
+            isSyncLocked={isSyncLocked}
+            onToggleInfiniteRadio={handleToggleInfiniteRadio}
+            onSeekToLine={handleSeekToLine}
+            onSyncLineHere={handleSyncLineHere}
+            onAdjustOffset={handleAdjustOffset}
+            onSetExactOffset={handleSetExactOffset}
+            onResetOffset={handleResetOffset}
+            onReplayTrack={handleReplayTrack}
+            onManualSearchLyrics={handleManualLyricsSearch}
+            onPlayFromQueue={handlePlayFromQueue}
+            onRemoveFromQueue={handleRemoveFromQueue}
           />
 
           {/* Subtle Cinema Corner Whisper when HUD auto-hides */}
@@ -1619,8 +1960,8 @@ const AuraStage: React.FC = () => {
             isPlaying={isPlaying}
             visualIcons={visualIcons}
             audioPulseRef={audioPulseRef}
-            onJumpToTime={(sec) => audioRef.current?.seek(sec)}
-            onOpenLyricsSearch={() => setLyricsDrawerOpen(true)}
+            onJumpToTime={handleJumpToTime}
+            onOpenLyricsSearch={handleOpenLyricsSearch}
           />
 
           {/* Universal 120fps Mirrored Horizon Spectrum across ALL Visual Worlds */}
@@ -1691,45 +2032,50 @@ const AuraStage: React.FC = () => {
                     )}
                     <div
                       ref={seekFillRef}
-                      className="h-1.5 rounded-full transition-[height] group-hover:h-2"
+                      className="w-full h-1.5 rounded-full origin-left transition-[height] group-hover:h-2 will-change-transform"
                       style={{
-                        width: '0%',
+                        transform: 'scaleX(0)',
                         background: `linear-gradient(90deg, ${primary}, ${blueprint.palette.accent})`,
                       }}
                     />
                   </div>
                   <span className="w-8 tabular-nums">{fmtTime(duration)}</span>
                   {lyrics.length > 0 && (
-                    <div className="hidden sm:flex items-center gap-0.5 bg-white/[0.06] rounded-md px-1.5 py-0.5 text-[9px] text-white/65">
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setLyricOffset((v) => {
-                            const next = Math.round((v - 0.5) * 10) / 10;
-                            saveOffset(activeSong.id, next);
-                            return next;
-                          })
-                        }
-                        className="hover:text-white cursor-pointer"
-                        title="Delay lyrics -0.5s ([)"
-                      >
-                        <Minus className="w-2.5 h-2.5" />
-                      </button>
-                      <span className="px-1">{lyricOffset >= 0 ? `+${lyricOffset}s` : `${lyricOffset}s`}</span>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setLyricOffset((v) => {
-                            const next = Math.round((v + 0.5) * 10) / 10;
-                            saveOffset(activeSong.id, next);
-                            return next;
-                          })
-                        }
-                        className="hover:text-white cursor-pointer"
-                        title="Advance lyrics +0.5s (])"
-                      >
-                        <Plus className="w-2.5 h-2.5" />
-                      </button>
+                    <div className="hidden sm:flex items-center gap-1">
+                      <div className="flex items-center gap-0.5 bg-white/[0.06] rounded-md px-1.5 py-0.5 text-[9px] text-white/65">
+                        <button
+                          type="button"
+                          onClick={() => handleAdjustOffset(-0.5)}
+                          className="hover:text-white cursor-pointer"
+                          title="Delay lyrics -0.5s ([)"
+                        >
+                          <Minus className="w-2.5 h-2.5" />
+                        </button>
+                        <span className="px-1">{lyricOffset >= 0 ? `+${lyricOffset.toFixed(1)}s` : `${lyricOffset.toFixed(1)}s`}</span>
+                        <button
+                          type="button"
+                          onClick={() => handleAdjustOffset(0.5)}
+                          className="hover:text-white cursor-pointer"
+                          title="Advance lyrics +0.5s (])"
+                        >
+                          <Plus className="w-2.5 h-2.5" />
+                        </button>
+                      </div>
+                      {!activeSong.isFullTrack && (
+                        <button
+                          type="button"
+                          onClick={() => setLyricsDrawerOpen(true)}
+                          className={`flex items-center gap-1 rounded-md px-2 py-0.5 text-[9px] font-semibold cursor-pointer transition-colors ${
+                            isSyncLocked
+                              ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-400/25'
+                              : 'bg-white/[0.09] hover:bg-white/[0.18] text-white border border-white/15'
+                          }`}
+                          title="30s Preview: tap the lyric line you hear to lock exact sync (L)"
+                        >
+                          <Crosshair className="w-2.5 h-2.5" style={{ color: isSyncLocked ? '#34d399' : primary }} />
+                          <span>{isSyncLocked ? 'Synced' : 'Tap-Sync'}</span>
+                        </button>
+                      )}
                     </div>
                   )}
                 </div>
@@ -1930,7 +2276,7 @@ const AuraStage: React.FC = () => {
       {/* Tabbed AURA Studio Popover (accessible on BOTH Home Screen & Playing Stage!) */}
       <StudioPopover
         open={vibePanelOpen && !pureCinema}
-        onClose={() => setVibePanelOpen(false)}
+        onClose={handleCloseStudio}
         blueprint={blueprint}
         activePresetId={activePresetId}
         onApplyPreset={applyPreset}
@@ -1990,6 +2336,10 @@ const AuraStage: React.FC = () => {
           setTimeout(() => setKeySaved(false), 1500);
         }}
         keySaved={keySaved}
+        saavnUrlDraft={saavnUrlDraft}
+        onSaavnUrlDraftChange={setSaavnUrlDraft}
+        onSaveSaavnUrl={handleSaveSaavnUrl}
+        saavnUrlSaved={saavnUrlSaved}
       />
     </div>
   );

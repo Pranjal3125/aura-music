@@ -1,6 +1,5 @@
 import React, { useEffect, useRef } from 'react';
-import type { LyricLine, VibeBlueprint } from '../types';
-import type { AudioPulseState } from './CosmosLyricsCanvas';
+import type { AudioPulseState, LyricLine, VibeBlueprint } from '../types';
 import { getWordVisualIcon } from '../services/lyricSync';
 
 interface FisheyeLyricsStageProps {
@@ -14,7 +13,7 @@ interface FisheyeLyricsStageProps {
   audioPulseRef: React.MutableRefObject<AudioPulseState>;
 }
 
-export const FisheyeLyricsStage: React.FC<FisheyeLyricsStageProps> = ({
+export const FisheyeLyricsStage: React.FC<FisheyeLyricsStageProps> = React.memo(({
   currentLine,
   prevLine,
   nextLine,
@@ -29,13 +28,20 @@ export const FisheyeLyricsStage: React.FC<FisheyeLyricsStageProps> = ({
 
   useEffect(() => {
     let rafId = 0;
+    let lastSc = -1;
     const tick = () => {
+      rafId = requestAnimationFrame(tick);
+      if (document.hidden) return;
       if (lensRef.current) {
         const p = audioPulseRef.current;
-        const sc = 1 + p.bass * 0.045 + p.beat * 0.035;
-        lensRef.current.style.transform = `translate3d(0,0,0) scale(${sc.toFixed(4)})`;
+        const sub = p.subBass ?? p.bass;
+        const voc = p.vocal ?? p.mid;
+        const sc = Math.round((1 + sub * 0.045 + p.beat * 0.038 + voc * 0.015) * 200) / 200;
+        if (sc !== lastSc) {
+          lastSc = sc;
+          lensRef.current.style.transform = `translate3d(0,0,0) scale(${sc.toFixed(3)})`;
+        }
       }
-      rafId = requestAnimationFrame(tick);
     };
     rafId = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(rafId);
@@ -80,7 +86,7 @@ export const FisheyeLyricsStage: React.FC<FisheyeLyricsStageProps> = ({
         />
 
         {/* Top Curving Previous Word */}
-        <div className="min-h-[30px] text-base sm:text-xl font-grotesk font-semibold text-white/30 blur-[0.4px] tracking-tight scale-90 transition-all duration-200 px-10 truncate max-w-full">
+        <div className="min-h-[30px] text-base sm:text-xl font-grotesk font-semibold text-white/30 tracking-tight scale-90 transition-opacity duration-200 px-10 truncate max-w-full">
           {prevWord}
         </div>
 
@@ -119,7 +125,7 @@ export const FisheyeLyricsStage: React.FC<FisheyeLyricsStageProps> = ({
         </div>
 
         {/* Bottom Curving Next Word */}
-        <div className="min-h-[30px] text-base sm:text-xl font-grotesk font-semibold text-white/30 blur-[0.4px] tracking-tight scale-90 transition-all duration-200 px-10 truncate max-w-full">
+        <div className="min-h-[30px] text-base sm:text-xl font-grotesk font-semibold text-white/30 tracking-tight scale-90 transition-opacity duration-200 px-10 truncate max-w-full">
           {nextWord}
         </div>
       </div>
@@ -147,4 +153,4 @@ export const FisheyeLyricsStage: React.FC<FisheyeLyricsStageProps> = ({
       </div>
     </div>
   );
-};
+});

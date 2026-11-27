@@ -4,6 +4,7 @@ import {
   KeyRound,
   Lock,
   MonitorPlay,
+  Server,
   Sparkles,
   Timer,
   Unlock,
@@ -85,6 +86,10 @@ interface StudioPopoverProps {
   onKeyDraftChange: (v: string) => void;
   onSaveKey: () => void;
   keySaved: boolean;
+  saavnUrlDraft?: string;
+  onSaavnUrlDraftChange?: (v: string) => void;
+  onSaveSaavnUrl?: () => void;
+  saavnUrlSaved?: boolean;
 }
 
 function fmtTime(sec: number): string {
@@ -92,7 +97,7 @@ function fmtTime(sec: number): string {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 }
 
-export const StudioPopover: React.FC<StudioPopoverProps> = ({
+export const StudioPopover: React.FC<StudioPopoverProps> = React.memo(({
   open,
   onClose,
   blueprint,
@@ -123,6 +128,10 @@ export const StudioPopover: React.FC<StudioPopoverProps> = ({
   onKeyDraftChange,
   onSaveKey,
   keySaved,
+  saavnUrlDraft,
+  onSaavnUrlDraftChange,
+  onSaveSaavnUrl,
+  saavnUrlSaved,
 }) => {
   const [studioTab, setStudioTab] = useState<'presets' | 'visuals' | 'audio'>('presets');
 
@@ -465,6 +474,35 @@ export const StudioPopover: React.FC<StudioPopoverProps> = ({
               </button>
             </div>
 
+            {onSaavnUrlDraftChange && onSaveSaavnUrl && (
+              <div className="pt-2 border-t border-white/[0.07] space-y-2">
+                <div className="text-[10px] font-mono-code uppercase tracking-widest text-white/45 flex items-center justify-between">
+                  <span>Full-Track API (Optional)</span>
+                  <span className="text-white/30">320kbps · 0:00 Sync</span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <div className="flex-1 min-w-0 flex items-center gap-2 rounded-xl bg-black/50 border border-white/[0.1] px-2.5 py-1.5">
+                    <Server className="w-3.5 h-3.5 text-white/40 shrink-0" />
+                    <input
+                      type="url"
+                      value={saavnUrlDraft || ''}
+                      onChange={(e) => onSaavnUrlDraftChange(e.target.value)}
+                      placeholder="https://your-saavn-api.vercel.app/api"
+                      className="flex-1 min-w-0 bg-transparent text-xs text-white placeholder:text-white/30 outline-none font-mono-code"
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={onSaveSaavnUrl}
+                    className="px-3 py-1.5 rounded-xl text-xs font-semibold text-black cursor-pointer shrink-0"
+                    style={{ backgroundColor: primary }}
+                  >
+                    {saavnUrlSaved ? <Check className="w-3.5 h-3.5" /> : 'Save'}
+                  </button>
+                </div>
+              </div>
+            )}
+
             <div className="pt-2 border-t border-white/[0.07] space-y-2">
               <div className="text-[10px] font-mono-code uppercase tracking-widest text-white/45 flex items-center justify-between">
                 <span>Gemini 4 Vision AI (Optional)</span>
@@ -496,4 +534,4 @@ export const StudioPopover: React.FC<StudioPopoverProps> = ({
       </div>
     </div>
   );
-};
+});

@@ -110,8 +110,16 @@ const sampleLyrics: LyricLine[] = [
 const pulseRef = {
   current: {
     bass: 0.4,
+    subBass: 0.45,
     beat: 0.6,
     mid: 0.35,
+    vocal: 0.5,
+    treble: 0.3,
+    energy: 0.45,
+    beatPhase: 0.25,
+    lineProgress: 0.5,
+    wordProgress: 0.5,
+    isLiveFft: true,
     spectrum: new Float32Array(32),
   },
 };
@@ -180,7 +188,9 @@ test('LyricsStage renders Apple UI intro preview and all 4 Apple UI card archety
     />
   );
   assert.ok(payHtml.includes('Apple Pay'));
+  assert.ok(payHtml.includes('Pay Sean Paul'), 'Apple Pay sheet should display Pay {artist} like the Reel');
   assert.ok(payHtml.includes('Done'));
+  assert.ok(payHtml.includes('Love under violet lights'), 'Completed Apple Pay sheet should pop paired iMessage reply');
 
   // Frosted Card (line 4)
   const frostHtml = renderToStaticMarkup(
@@ -406,6 +416,45 @@ test('StudioPopover, LyricsTimelineDrawer, and CompanionScreen render cleanly', 
   );
   assert.ok(drawerHtml.includes('SYNCED LRC'));
   assert.ok(drawerHtml.includes('Matched: No Lie · Sean Paul'));
+
+  const previewSong: SongItem = {
+    ...sampleSong,
+    isFullTrack: false,
+    duration: 30,
+    source: 'itunes',
+  };
+  const previewDrawerHtml = renderToStaticMarkup(
+    <LyricsTimelineDrawer
+      open={true}
+      onClose={() => {}}
+      song={previewSong}
+      lyrics={sampleLyrics}
+      lyricsLoading={false}
+      lyricMatchSource="lrclib_synced"
+      matchedTrackInfo="No Lie · Sean Paul"
+      activeLineIdx={1}
+      lyricOffset={15}
+      accentColor="#a855f7"
+      queue={[previewSong]}
+      infiniteRadio={true}
+      radioLoading={false}
+      isSyncLocked={true}
+      onToggleInfiniteRadio={() => {}}
+      onSeekToLine={() => {}}
+      onSyncLineHere={() => {}}
+      onAdjustOffset={() => {}}
+      onSetExactOffset={() => {}}
+      onResetOffset={() => {}}
+      onReplayTrack={() => {}}
+      onManualSearchLyrics={() => {}}
+      onPlayFromQueue={() => {}}
+      onRemoveFromQueue={() => {}}
+    />
+  );
+  assert.ok(previewDrawerHtml.includes('-5s') && previewDrawerHtml.includes('+5s'));
+  assert.ok(previewDrawerHtml.includes('LOCKED'));
+  assert.ok(previewDrawerHtml.includes('Replay'));
+  assert.ok(previewDrawerHtml.includes('Type words you hear'));
 
   const companionHtml = renderToStaticMarkup(<CompanionScreen />);
   assert.ok(companionHtml.includes('AURA Companion Display'));

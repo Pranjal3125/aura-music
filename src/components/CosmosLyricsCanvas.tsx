@@ -1,12 +1,7 @@
 import React, { useEffect, useRef } from 'react';
-import { LyricLine, LyricStyleId, VibePalette } from '../types';
+import { AudioPulseState, LyricLine, LyricStyleId, VibePalette } from '../types';
 
-export interface AudioPulseState {
-  bass: number;
-  beat: number;
-  mid: number;
-  spectrum: Float32Array;
-}
+export type { AudioPulseState };
 
 export type CanvasLyricMode = Extract<
   LyricStyleId,
@@ -37,6 +32,8 @@ interface WorldWordNode {
   scaleVel: number;
   edgeProg: number;
   visAlpha: number;
+  cachedWidthPx: number;
+  cachedFontPx: number;
 }
 
 interface BgStar {
@@ -176,6 +173,8 @@ function buildConstellationWorld(lyrics: LyricLine[]): WorldWordNode[] {
         scaleVel: 0,
         edgeProg: 0,
         visAlpha: 0,
+        cachedWidthPx: 0,
+        cachedFontPx: 0,
       });
     });
   });
@@ -211,7 +210,7 @@ function drawFourPointStar(
   ctx.restore();
 }
 
-export const CosmosLyricsCanvas: React.FC<CosmosLyricsCanvasProps> = ({
+export const CosmosLyricsCanvas: React.FC<CosmosLyricsCanvasProps> = React.memo(({
   mode,
   lyrics,
   activeLineIdx,
@@ -233,10 +232,23 @@ export const CosmosLyricsCanvas: React.FC<CosmosLyricsCanvasProps> = ({
   stateRef.current = { mode, lyrics, activeLineIdx, activeWordIdx, palette, particleMode };
 
   const worldRef = useRef<WorldWordNode[]>([]);
+  const worldIndexRef = useRef<{ byLineWord: Map<number, number>; byLineFirst: Map<number, number> }>({
+    byLineWord: new Map(),
+    byLineFirst: new Map(),
+  });
   const spritesRef = useRef<{ primary: HTMLCanvasElement; accent: HTMLCanvasElement } | null>(null);
 
   useEffect(() => {
-    worldRef.current = buildConstellationWorld(lyrics);
+    const built = buildConstellationWorld(lyrics);
+    worldRef.current = built;
+    const byLineWord = new Map<number, number>();
+    const byLineFirst = new Map<number, number>();
+    for (let i = 0; i < built.length; i++) {
+      const n = built[i];
+      byLineWord.set(n.lineIdx * 1024 + n.wordIdx, i);
+      if (!byLineFirst.has(n.lineIdx)) byLineFirst.set(n.lineIdx, i);
+    }
+    worldIndexRef.current = { byLineWord, byLineFirst };
   }, [lyrics]);
 
   useEffect(() => {
@@ -321,6 +333,18 @@ export const CosmosLyricsCanvas: React.FC<CosmosLyricsCanvasProps> = ({
     const curP: [number, number, number] = hexToRgb(stateRef.current.palette.primary);
     const curS: [number, number, number] = hexToRgb(stateRef.current.palette.secondary);
     const curA: [number, number, number] = hexToRgb(stateRef.current.palette.accent);
+    let cachedPHex = stateRef.current.palette.primary;
+    let cachedSHex = stateRef.current.palette.secondary;
+    let cachedAHex = stateRef.current.palette.accent;
+    let targetP: [number, number, number] = [...curP];
+    let targetS: [number, number, number] = [...curS];
+    let targetA: [number, number, number] = [...curA];
+
+    // Cached text measurement for Mirror & Glitch modes (avoids calling ctx.measureText every frame)
+    let mirrorCacheKey = '';
+    let mirrorCachedLayout: { fontPx: number; scaledGap: number; scaledWidths: number[]; finalTotalW: number } | null = null;
+    let glitchCacheKey = '';
+    let glitchCachedWidths: { widths: number[]; totalW: number } | null = null;
 
     let lastActiveGlobal = -1;
     let webRipple = 0;
@@ -345,18 +369,33 @@ export const CosmosLyricsCanvas: React.FC<CosmosLyricsCanvasProps> = ({
     };
 
     const render = (now: number) => {
+      rafId = requestAnimationFrame(render);
+      if (document.hidden) {
+        prevNow = now;
+        return;
+      }
       const dt = Math.min(0.05, Math.max(0.001, (now - prevNow) * 0.001));
       prevNow = now;
       const t = now * 0.001;
 
       const st = stateRef.current;
       const world = worldRef.current;
+      const worldIndex = worldIndexRef.current;
       const sprites = spritesRef.current;
       const pulse = audioPulseRef.current;
 
-      const targetP = hexToRgb(st.palette.primary);
-      const targetS = hexToRgb(st.palette.secondary);
-      const targetA = hexToRgb(st.palette.accent);
+      if (st.palette.primary !== cachedPHex) {
+        cachedPHex = st.palette.primary;
+        targetP = hexToRgb(cachedPHex);
+      }
+      if (st.palette.secondary !== cachedSHex) {
+        cachedSHex = st.palette.secondary;
+        targetS = hexToRgb(cachedSHex);
+      }
+      if (st.palette.accent !== cachedAHex) {
+        cachedAHex = st.palette.accent;
+        targetA = hexToRgb(cachedAHex);
+      }
       const colLerp = 1 - Math.exp(-3.4 * dt);
       for (let c = 0; c < 3; c++) {
         curP[c] += (targetP[c] - curP[c]) * colLerp;
@@ -369,14 +408,12 @@ export const CosmosLyricsCanvas: React.FC<CosmosLyricsCanvasProps> = ({
       let activeGlobal = -1;
       if (st.activeLineIdx >= 0 && world.length > 0) {
         const targetW = Math.max(0, st.activeWordIdx);
-        for (let i = 0; i < world.length; i++) {
-          if (world[i].lineIdx === st.activeLineIdx && world[i].wordIdx === targetW) {
-            activeGlobal = i;
-            break;
-          }
-        }
-        if (activeGlobal === -1) {
-          activeGlobal = world.findIndex((n) => n.lineIdx === st.activeLineIdx);
+        const exact = worldIndex.byLineWord.get(st.activeLineIdx * 1024 + targetW);
+        if (exact !== undefined) {
+          activeGlobal = exact;
+        } else {
+          const lineFirst = worldIndex.byLineFirst.get(st.activeLineIdx);
+          if (lineFirst !== undefined) activeGlobal = lineFirst;
         }
       }
 
@@ -807,7 +844,12 @@ export const CosmosLyricsCanvas: React.FC<CosmosLyricsCanvasProps> = ({
             if (g > 0.15) {
               ctx.save();
               ctx.globalCompositeOperation = 'lighter';
-              const tw = ctx.measureText(node.text).width;
+              const fontBucket = Math.round(basePx * 2);
+              if (node.cachedFontPx !== fontBucket || node.cachedWidthPx <= 0) {
+                node.cachedFontPx = fontBucket;
+                node.cachedWidthPx = ctx.measureText(node.text).width;
+              }
+              const tw = node.cachedWidthPx;
               ctx.globalAlpha = g * 0.52;
               ctx.drawImage(sprites.primary, -tw * 0.75, -basePx * 1.15, tw * 1.5, basePx * 2.3);
               ctx.restore();
@@ -1072,20 +1114,26 @@ export const CosmosLyricsCanvas: React.FC<CosmosLyricsCanvasProps> = ({
             }
             ctx.restore();
 
-            // Measure words & auto-fit nicely inside viewport
+            // Measure words & auto-fit nicely inside viewport (cached per line + viewport width)
             const words = line.words;
-            const rawFontPx = Math.min(48, Math.max(24, w * 0.036));
-            ctx.font = `700 ${rawFontPx}px "Space Grotesk", sans-serif`;
-            const gap = 16;
-            const widths = words.map((wd) => ctx.measureText(wd.text).width);
-            const totalW = widths.reduce((a, b) => a + b, 0) + gap * Math.max(0, words.length - 1);
-            const fitScale = Math.min(1, (w * 0.86) / Math.max(1, totalW));
-            const fontPx = rawFontPx * fitScale;
-            const scaledGap = gap * fitScale;
-            ctx.font = `700 ${fontPx.toFixed(1)}px "Space Grotesk", sans-serif`;
-            const scaledWidths = words.map((wd) => ctx.measureText(wd.text).width);
-            const finalTotalW =
-              scaledWidths.reduce((a, b) => a + b, 0) + scaledGap * Math.max(0, words.length - 1);
+            const mKey = `${st.activeLineIdx}|${line.text}|${Math.round(w)}`;
+            if (mKey !== mirrorCacheKey || !mirrorCachedLayout) {
+              mirrorCacheKey = mKey;
+              const rawFontPx = Math.min(48, Math.max(24, w * 0.036));
+              ctx.font = `700 ${rawFontPx}px "Space Grotesk", sans-serif`;
+              const gap = 16;
+              const widths = words.map((wd) => ctx.measureText(wd.text).width);
+              const totalW = widths.reduce((a, b) => a + b, 0) + gap * Math.max(0, words.length - 1);
+              const fitScale = Math.min(1, (w * 0.86) / Math.max(1, totalW));
+              const fontPx = rawFontPx * fitScale;
+              const scaledGap = gap * fitScale;
+              ctx.font = `700 ${fontPx.toFixed(1)}px "Space Grotesk", sans-serif`;
+              const scaledWidths = words.map((wd) => ctx.measureText(wd.text).width);
+              const finalTotalW =
+                scaledWidths.reduce((a, b) => a + b, 0) + scaledGap * Math.max(0, words.length - 1);
+              mirrorCachedLayout = { fontPx, scaledGap, scaledWidths, finalTotalW };
+            }
+            const { fontPx, scaledGap, scaledWidths, finalTotalW } = mirrorCachedLayout;
 
             let cursorX = cxScreen - finalTotalW * 0.5;
             const baselineY = horizonY - 40;
@@ -1247,17 +1295,23 @@ export const CosmosLyricsCanvas: React.FC<CosmosLyricsCanvasProps> = ({
             }
           }
 
-          // Active line timeline under reticle
+          // Active line timeline under reticle (cached measurements)
           if (line && line.words.length > 0) {
             ctx.font = '600 16px "Space Grotesk", sans-serif';
             const gap = 12;
-            const totalW =
-              line.words.reduce((acc, wd) => acc + ctx.measureText(wd.text).width, 0) +
-              gap * Math.max(0, line.words.length - 1);
-            let wx = cxScreen - totalW * 0.5;
+            const gKey = `${st.activeLineIdx}|${line.text}`;
+            if (gKey !== glitchCacheKey || !glitchCachedWidths) {
+              glitchCacheKey = gKey;
+              const widths = line.words.map((wd) => ctx.measureText(wd.text).width);
+              const totalW =
+                widths.reduce((acc, ww) => acc + ww, 0) +
+                gap * Math.max(0, line.words.length - 1);
+              glitchCachedWidths = { widths, totalW };
+            }
+            let wx = cxScreen - glitchCachedWidths.totalW * 0.5;
             const wy = by - 28;
             line.words.forEach((wd, idx) => {
-              const wWidth = ctx.measureText(wd.text).width;
+              const wWidth = glitchCachedWidths!.widths[idx] || 0;
               const isAct = idx === st.activeWordIdx;
               const isPastW = idx < st.activeWordIdx;
               ctx.fillStyle = isAct ? rgba(curP, 1) : isPastW ? rgba(curA, 0.85) : 'rgba(255,255,255,0.28)';
@@ -1314,8 +1368,6 @@ export const CosmosLyricsCanvas: React.FC<CosmosLyricsCanvasProps> = ({
         }
         ctx.restore();
       }
-
-      rafId = requestAnimationFrame(render);
     };
 
     rafId = requestAnimationFrame(render);
@@ -1332,4 +1384,4 @@ export const CosmosLyricsCanvas: React.FC<CosmosLyricsCanvasProps> = ({
       className="fixed inset-0 w-full h-full pointer-events-none z-[5]"
     />
   );
-};
+});

@@ -26,7 +26,7 @@ interface ClickSpark {
  * Global 120fps OLED Pointer Ripple & Micro-Spark Feedback Overlay.
  * Sleeps at 0% CPU when idle and wakes rAF strictly during active click bursts.
  */
-export const ClickPulseOverlay: React.FC = () => {
+export const ClickPulseOverlay: React.FC = React.memo(() => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
   useEffect(() => {
@@ -146,9 +146,11 @@ export const ClickPulseOverlay: React.FC = () => {
         target?.closest('button, a, input, [role="button"], .cursor-pointer, .aura-interactive')
       );
 
-      const cs = getComputedStyle(canvas.parentElement || document.documentElement);
-      const primary = cs.getPropertyValue('--aura-primary').trim() || '#ff1e42';
-      const accent = cs.getPropertyValue('--aura-accent').trim() || '#ffffff';
+      const parent = canvas.parentElement;
+      const inlinePrimary = parent?.style.getPropertyValue('--aura-primary').trim();
+      const inlineAccent = parent?.style.getPropertyValue('--aura-accent').trim();
+      const primary = inlinePrimary || '#a855f7';
+      const accent = inlineAccent || '#ffffff';
 
       ripples.push({
         x: e.clientX,
@@ -195,4 +197,4 @@ export const ClickPulseOverlay: React.FC = () => {
   }, []);
 
   return <canvas ref={canvasRef} className="fixed inset-0 w-full h-full pointer-events-none z-[95]" />;
-};
+});

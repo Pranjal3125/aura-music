@@ -78,6 +78,21 @@ export interface VibeBlueprint {
   showSpectrum: boolean;
 }
 
+export interface AudioPulseState {
+  bass: number;
+  subBass: number;
+  beat: number;
+  mid: number;
+  vocal: number;
+  treble: number;
+  energy: number;
+  beatPhase: number;
+  lineProgress: number;
+  wordProgress: number;
+  isLiveFft: boolean;
+  spectrum: Float32Array;
+}
+
 export interface CompanionSyncMessage {
   type: 'STATE_SYNC';
   song: {
@@ -97,10 +112,12 @@ export interface CompanionSyncMessage {
   nextLineText?: string;
   bass: number;
   beat: number;
+  vocal?: number;
+  energy?: number;
   timestamp?: number;
 }
 
 export interface CompanionCommandMessage {
-  type: 'CMD';
-  action: 'toggle_play' | 'prev' | 'next';
+  type: 'CMD' | 'COMPANION_HELLO';
+  action?: 'toggle_play' | 'prev' | 'next';
 }

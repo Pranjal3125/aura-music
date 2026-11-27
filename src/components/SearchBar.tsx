@@ -19,7 +19,7 @@ function formatDur(sec: number): string {
   return `${m}:${String(s).padStart(2, '0')}`;
 }
 
-export const SearchBar: React.FC<SearchBarProps> = ({
+export const SearchBar: React.FC<SearchBarProps> = React.memo(({
   compact = false,
   accentColor,
   externalQuery,
@@ -298,4 +298,4 @@ export const SearchBar: React.FC<SearchBarProps> = ({
       )}
     </div>
   );
-};
+});

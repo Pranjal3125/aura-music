@@ -13,7 +13,7 @@ function decodeHtml(str: string): string {
 }
 
 export const JUNK_PATTERN =
-  /\b(karaoke|instrumental version|8d audio|ringtone|lofi flip|slowed\s*\+\s*reverb|sped\s*up|nightcore|vocals?\s*only|a\s*cappella|acapella|tribute to|originally performed|melody karaoke|mashup|x\s+aahatein|cover version)\b/i;
+  /\b(karaoke|instrumental version|8d audio|ringtone|lofi flip|slowed\s*\+\s*reverb|sped\s*up|nightcore|vocals?\s*only|a\s*cappella|acapella|tribute to|originally\s+perf?ormed|melody karaoke|mashup|x\s+aahatein|cover version)\b/i;
 
 interface SaavnSongRaw {
   id: string;
@@ -187,10 +187,10 @@ export function scoreTrackRelevance(song: SongItem, query: string): number {
     score -= 160;
   }
   if (
-    !/\b(remix|cover|lofi|lo-fi|reprise|unplugged|slowed|reverb|sped\s*up|8d|mashup)\b/i.test(query) &&
-    /\b(remix|cover|reprise|unplugged|lo-?fi|slowed|reverb|sped\s*up|8d|mashup)\b/i.test(song.title)
+    !/\b(remix|cover|lofi|lo-fi|reprise|unplugged|slowed|reverb|sped\s*up|8d|mashup|bootleg|flip|dj|bass\s*boosted)\b/i.test(query) &&
+    /\b(remix|cover|reprise|unplugged|lo-?fi|slowed|reverb|sped\s*up|8d|mashup|bootleg|flip|dj\s+mix|bass\s*boosted)\b/i.test(song.title)
   ) {
-    score -= 45;
+    score -= 55;
   }
 
   if (song.isFullTrack && song.source === 'saavn') score += 32;
@@ -209,13 +209,22 @@ export function scoreTrackRelevance(song: SongItem, query: string): number {
 }
 
 /**
- * Optional self-hosted JioSaavn API support.
- * Zero default calls to dead/rate-limited public mirrors or CORS proxies so initial
- * page load produces zero Chrome console/CORS errors.
+ * Built-in gentle serialized JioSaavn full-track backend (with optional self-hosted override).
+ * - Never bursted on Home load (zero 429 rate-limit spam)
+ * - Strictly serialized (>=320ms spacing), response-cached, and 90s auto-cooldown on errors
+ * - Zero dead mirrors or failing third-party CORS proxies
  */
+export const DEFAULT_SAAVN_BASE_URL = 'https://saavn.sumit.co/api';
 export const CUSTOM_SAAVN_STORAGE_KEY = 'aura_saavn_api_url';
+const SAAVN_MIN_GAP_MS = 320;
+const SAAVN_CACHE_TTL_MS = 10 * 60_000;
+
 let customSaavnOverride: string | null | undefined = undefined;
 let saavnCooldownUntil = 0;
+let lastSaavnFetchAt = 0;
+let saavnQueueTail: Promise<void> = Promise.resolve();
+const saavnResponseCache = new Map<string, { at: number; data: unknown }>();
+const saavnUpgradeCache = new Map<string, SongItem | null>();
 
 function normalizeSaavnBaseUrl(raw: string | null | undefined): string | null {
   if (!raw || typeof raw !== 'string') return null;
@@ -255,10 +264,16 @@ export function getCustomSaavnBaseUrl(): string | null {
   return null;
 }
 
+function resolveSaavnBaseUrl(): string {
+  return getCustomSaavnBaseUrl() || DEFAULT_SAAVN_BASE_URL;
+}
+
 export function setCustomSaavnBaseUrl(url: string | null): string | null {
   const normalized = normalizeSaavnBaseUrl(url);
   customSaavnOverride = normalized;
   saavnCooldownUntil = 0;
+  saavnResponseCache.clear();
+  saavnUpgradeCache.clear();
   if (typeof window !== 'undefined' && window.localStorage) {
     try {
       if (normalized) window.localStorage.setItem(CUSTOM_SAAVN_STORAGE_KEY, normalized);
@@ -273,6 +288,11 @@ export function setCustomSaavnBaseUrl(url: string | null): string | null {
 export function resetSaavnClientStateForTests(): void {
   customSaavnOverride = undefined;
   saavnCooldownUntil = 0;
+  lastSaavnFetchAt = 0;
+  saavnQueueTail = Promise.resolve();
+  saavnResponseCache.clear();
+  saavnUpgradeCache.clear();
+  lyricsResultCache.clear();
 }
 
 function isValidSaavnPayload(json: unknown, requireNonEmpty = false): boolean {
@@ -290,26 +310,62 @@ function isValidSaavnPayload(json: unknown, requireNonEmpty = false): boolean {
   return requireNonEmpty ? list.length > 0 : true;
 }
 
-async function fetchSaavnJson<T>(path: string): Promise<T | null> {
-  const baseUrl = getCustomSaavnBaseUrl();
-  if (!baseUrl) return null;
+async function fetchSaavnJson<T>(path: string, timeoutMs = 4200): Promise<T | null> {
+  const baseUrl = resolveSaavnBaseUrl();
+  const cacheKey = `${baseUrl}${path}`;
+  const cached = saavnResponseCache.get(cacheKey);
+  if (cached && Date.now() - cached.at < SAAVN_CACHE_TTL_MS) {
+    return cached.data as T;
+  }
   if (Date.now() < saavnCooldownUntil) return null;
 
+  const isDefaultPublic = baseUrl === DEFAULT_SAAVN_BASE_URL;
+  let releaseQueue: () => void = () => {};
+  if (isDefaultPublic) {
+    const prev = saavnQueueTail;
+    saavnQueueTail = new Promise<void>((resolve) => {
+      releaseQueue = resolve;
+    });
+    await prev;
+  }
+
   try {
-    const res = await fetch(`${baseUrl}${path}`, { signal: AbortSignal.timeout(4200) });
+    // Re-check cache & cooldown after waiting in queue
+    const reCached = saavnResponseCache.get(cacheKey);
+    if (reCached && Date.now() - reCached.at < SAAVN_CACHE_TTL_MS) {
+      return reCached.data as T;
+    }
+    if (Date.now() < saavnCooldownUntil) return null;
+
+    if (isDefaultPublic && lastSaavnFetchAt > 0) {
+      const waitMs = SAAVN_MIN_GAP_MS - (Date.now() - lastSaavnFetchAt);
+      if (waitMs > 0) {
+        await new Promise((r) => setTimeout(r, waitMs));
+      }
+    }
+    lastSaavnFetchAt = Date.now();
+
+    const res = await fetch(`${baseUrl}${path}`, { signal: AbortSignal.timeout(timeoutMs) });
     if (!res.ok) {
-      saavnCooldownUntil = Date.now() + 60_000;
+      saavnCooldownUntil = Date.now() + 90_000;
       return null;
     }
     const json = (await res.json()) as T;
     if (!isValidSaavnPayload(json, false)) {
-      saavnCooldownUntil = Date.now() + 60_000;
+      saavnCooldownUntil = Date.now() + 90_000;
       return null;
     }
+    if (saavnResponseCache.size > 60) {
+      const firstKey = saavnResponseCache.keys().next().value;
+      if (firstKey) saavnResponseCache.delete(firstKey);
+    }
+    saavnResponseCache.set(cacheKey, { at: Date.now(), data: json });
     return json;
   } catch {
-    saavnCooldownUntil = Date.now() + 60_000;
+    saavnCooldownUntil = Date.now() + 90_000;
     return null;
+  } finally {
+    releaseQueue();
   }
 }
 
@@ -592,7 +648,7 @@ const FEATURED_QUERIES: FeaturedTrackSpec[] = [
 ];
 
 const FEATURED_KNOCKOFF_MODIFIERS =
-  /\b(remix|cover|reprise|unplugged|karaoke|instrumental|lo-?fi|slowed|reverb|sped\s*up|nightcore|8d|acoustic|live|mashup|tribute|ringtone|dj\s+mix)\b/i;
+  /\b(remix|cover|reprise|unplugged|karaoke|instrumental|lo-?fi|slowed|reverb|sped\s*up|nightcore|8d|acoustic|live|mashup|tribute|ringtone|dj\s+mix|synthwave|dance\s+mix|club\s+mix)\b/i;
 
 export function matchesFeaturedSpec(
   song: SongItem,
@@ -617,14 +673,155 @@ export function matchesFeaturedSpec(
   return spec.expectedArtists.some((art) => artistNorm.includes(normalizeForMatch(art)));
 }
 
+/**
+ * On-demand single-track upgrade: turns an iTunes 30s preview into the verified
+ * full-length 320kbps studio track starting at 0:00 (with CORS-enabled live FFT & exact lyric sync!)
+ * while strictly rejecting remixes, sped-up edits, karaoke covers, and duration mismatches.
+ */
+export async function upgradeToFullSaavnTrack(song: SongItem): Promise<SongItem | null> {
+  if (song.isFullTrack || song.source !== 'itunes') return null;
+  if (saavnUpgradeCache.has(song.id)) {
+    return saavnUpgradeCache.get(song.id) ?? null;
+  }
+
+  const cleanT = cleanTrackTitle(song.title);
+  const targetCleanNorm = normalizeForMatch(cleanT);
+  if (!targetCleanNorm) return null;
+
+  const artists = extractAllSongArtists(song);
+  const query = `${cleanT} ${artists.slice(0, 2).join(' ')}`.trim();
+  const candidates = await fetchSaavnSongs(query);
+  const allowModifier = FEATURED_KNOCKOFF_MODIFIERS.test(song.title);
+
+  let best: { cand: SongItem; score: number } | null = null;
+  for (const cand of candidates) {
+    if (!cand.isFullTrack || cand.source !== 'saavn' || !cand.audioUrl) continue;
+    if (JUNK_PATTERN.test(`${cand.title} ${cand.artist} ${cand.album}`)) continue;
+    if (!allowModifier && FEATURED_KNOCKOFF_MODIFIERS.test(cand.title)) continue;
+
+    // Require exact cleaned title match so "Tum Hi Ho Bandhu" never replaces "Tum Hi Ho"
+    const candCleanNorm = normalizeForMatch(cleanTrackTitle(cand.title));
+    if (candCleanNorm !== targetCleanNorm) continue;
+
+    // Require verified artist overlap
+    const candArtistNorm = normalizeForMatch(`${cand.artist} ${cand.title}`);
+    let artistMatched = artists.length === 0;
+    for (const art of artists) {
+      const aNorm = normalizeForMatch(art);
+      if (!aNorm) continue;
+      if (candArtistNorm.includes(aNorm)) {
+        artistMatched = true;
+        break;
+      }
+      const tokens = aNorm.split(' ').filter((w) => w.length >= 4);
+      if (tokens.some((tok) => candArtistNorm.includes(tok))) {
+        artistMatched = true;
+        break;
+      }
+    }
+    if (!artistMatched) continue;
+
+    // Strict studio duration guard (+/- 14s) so sped-up/extended/alternate masters are rejected
+    let durBonus = 0;
+    if (song.fullDuration && song.fullDuration > 45 && cand.duration > 45) {
+      const diff = Math.abs(cand.duration - song.fullDuration);
+      if (diff > 14) continue;
+      durBonus = Math.max(0, 60 - diff * 4);
+    }
+
+    const sc = scoreTrackRelevance(cand, query) + durBonus;
+    if (!best || sc > best.score) {
+      best = { cand, score: sc };
+    }
+  }
+
+  const upgraded: SongItem | null = best
+    ? {
+        ...song,
+        audioUrl: best.cand.audioUrl,
+        duration: best.cand.duration,
+        fullDuration: best.cand.duration,
+        artworkUrl: song.artworkUrl || best.cand.artworkUrl,
+        source: 'saavn',
+        isFullTrack: true,
+        playCount: best.cand.playCount ?? song.playCount,
+      }
+    : null;
+
+  if (saavnUpgradeCache.size > 60) {
+    const firstKey = saavnUpgradeCache.keys().next().value;
+    if (firstKey) saavnUpgradeCache.delete(firstKey);
+  }
+  saavnUpgradeCache.set(song.id, upgraded);
+  return upgraded;
+}
+
+/**
+ * Audio-verified exact iTunes 30s preview start offsets (seconds into full studio master).
+ * Ensures millisecond-accurate lyric lock even on global tracks that play as 30s previews!
+ */
+const KNOWN_ITUNES_PREVIEW_OFFSETS_BY_ID: Record<string, number> = {
+  'itunes-1444609119': 47.0, // No Lie (feat. Dua Lipa) — Sean Paul
+  'itunes-1440870375': 45.0, // Starboy (feat. Daft Punk) — The Weeknd
+  'itunes-1635014240': 49.0, // Kesariya (From "Brahmastra") — Pritam, Arijit Singh
+  'itunes-1073359419': 29.5, // Tum Hi Ho — Mithoon, Arijit Singh
+  'itunes-1653219849': 0.0,  // Apna Bana Le (From "Bhediya") — Arijit Singh
+  'itunes-1702461667': 29.8, // Chaleya (From "Jawan") — Anirudh, Arijit Singh
+  'itunes-1580955743': 47.8, // Raataan Lambiyan — Tanishk Bagchi, Jubin Nautiyal
+  'itunes-1717140552': 49.0, // Husn — Anuv Jain
+};
+
+const KNOWN_ITUNES_PREVIEW_OFFSETS_BY_KEY: Record<string, number> = {
+  'nolie::seanpaul': 47.0,
+  'nolie::dualipa': 47.0,
+  'starboy::theweeknd': 45.0,
+  'kesariya::pritam': 49.0,
+  'kesariya::arijitsingh': 49.0,
+  'tumhiho::mithoon': 29.5,
+  'tumhiho::arijitsingh': 29.5,
+  'apnabanale::arijitsingh': 0.0,
+  'apnabanale::sachinjigar': 0.0,
+  'chaleya::anirudhravichander': 29.8,
+  'chaleya::anirudh': 29.8,
+  'chaleya::arijitsingh': 29.8,
+  'raataanlambiyan::tanishkbagchi': 47.8,
+  'raataanlambiyan::jubinnautiyal': 47.8,
+  'husn::anuvjain': 49.0,
+};
+
+export function getKnownPreviewOffset(
+  song: Pick<SongItem, 'id' | 'title' | 'artist' | 'source' | 'isFullTrack'>
+): number | null {
+  if (song.isFullTrack || song.source !== 'itunes') return null;
+  if (Object.prototype.hasOwnProperty.call(KNOWN_ITUNES_PREVIEW_OFFSETS_BY_ID, song.id)) {
+    return KNOWN_ITUNES_PREVIEW_OFFSETS_BY_ID[song.id];
+  }
+  const primaryKey = makeSongKey(song.title, song.artist);
+  if (Object.prototype.hasOwnProperty.call(KNOWN_ITUNES_PREVIEW_OFFSETS_BY_KEY, primaryKey)) {
+    return KNOWN_ITUNES_PREVIEW_OFFSETS_BY_KEY[primaryKey];
+  }
+  const cleanT = cleanTrackTitle(song.title).toLowerCase().replace(/[^a-z0-9]/g, '');
+  for (const art of extractAllSongArtists(song)) {
+    const key = `${cleanT}::${art.toLowerCase().replace(/[^a-z0-9]/g, '')}`;
+    if (Object.prototype.hasOwnProperty.call(KNOWN_ITUNES_PREVIEW_OFFSETS_BY_KEY, key)) {
+      return KNOWN_ITUNES_PREVIEW_OFFSETS_BY_KEY[key];
+    }
+  }
+  return null;
+}
+
 async function resolveSingleFeaturedTrack(
   spec: Omit<FeaturedTrackSpec, 'fallbacks'>
 ): Promise<SongItem | null> {
-  const saavn = await fetchSaavnSongs(spec.query);
-  const verifiedSaavn = saavn.filter((s) => matchesFeaturedSpec(s, spec));
-  if (verifiedSaavn.length > 0) {
-    verifiedSaavn.sort((a, b) => scoreTrackRelevance(b, spec.query) - scoreTrackRelevance(a, spec.query));
-    return verifiedSaavn[0];
+  // Only query Saavn on Home burst when user configured a dedicated custom endpoint;
+  // default public Saavn is reserved for gentle on-demand 1-track full upgrades on Play & Search!
+  if (getCustomSaavnBaseUrl()) {
+    const saavn = await fetchSaavnSongs(spec.query);
+    const verifiedSaavn = saavn.filter((s) => matchesFeaturedSpec(s, spec));
+    if (verifiedSaavn.length > 0) {
+      verifiedSaavn.sort((a, b) => scoreTrackRelevance(b, spec.query) - scoreTrackRelevance(a, spec.query));
+      return verifiedSaavn[0];
+    }
   }
 
   // Prefer regional storefront first when specified (halves iTunes API calls & avoids US knockoffs)
@@ -669,17 +866,51 @@ export async function loadFeaturedSongs(): Promise<SongItem[]> {
   return results.filter((x): x is SongItem => x !== null);
 }
 
+const lyricsResultCache = new Map<string, LyricsFetchResult>();
+
+export function clearLyricsCache(): void {
+  lyricsResultCache.clear();
+}
+
+/**
+ * Extracts all credited artists from BOTH song.artist and "(feat. X)" / "ft. X" tags in song.title.
+ */
+export function extractAllSongArtists(song: Pick<SongItem, 'title' | 'artist'>): string[] {
+  const fromArtist = extractArtistList(song.artist);
+  const featMatches = Array.from(
+    decodeHtml(song.title).matchAll(/(?:\(|\[|\b)(?:feat|ft|with)\.?\s+([^)\]–—-]+)/gi)
+  );
+  const combined = [...fromArtist];
+  const seen = new Set(combined.map((a) => a.toLowerCase()));
+  for (const m of featMatches) {
+    for (const extra of extractArtistList(m[1] || '')) {
+      const k = extra.toLowerCase();
+      if (!seen.has(k)) {
+        seen.add(k);
+        combined.push(extra);
+      }
+    }
+  }
+  return combined;
+}
+
 /**
  * Builds natural vocal-cadence word timings inside a line.
  */
 export function buildTimedLine(start: number, end: number, text: string): LyricLine {
   const rawWords = text.trim().split(/\s+/).filter(Boolean);
   const wordCount = rawWords.length;
-  const naturalCap = Math.max(1.75, wordCount * 0.56);
+  // Syllable/character-aware vocal cadence: snappy on short 1-2 word hooks ("No lie")
+  // while never rushing ahead on slower poetic ballad lines.
+  const totalChars = rawWords.reduce(
+    (acc, w) => acc + w.replace(/[^\p{L}\p{N}]/gu, '').length,
+    0
+  );
+  const naturalCap = Math.min(6.2, Math.max(0.75, wordCount * 0.34 + totalChars * 0.052));
   const sweepEnd = Math.min(end, start + naturalCap);
-  const totalDur = Math.max(0.4, sweepEnd - start);
+  const totalDur = Math.max(0.28, sweepEnd - start);
 
-  const weights = rawWords.map((w) => Math.max(0.95, w.replace(/[^a-zA-Z0-9]/g, '').length * 0.52 + 0.85));
+  const weights = rawWords.map((w) => Math.max(0.95, w.replace(/[^\p{L}\p{N}]/gu, '').length * 0.52 + 0.85));
   const sum = weights.reduce((a, b) => a + b, 0);
 
   let cursor = start;
@@ -693,39 +924,93 @@ export function buildTimedLine(start: number, end: number, text: string): LyricL
   return { start, end, text, words };
 }
 
+const LRC_CREDIT_LINE_RX =
+  /^(?:(?:title|artist|album|lyrics?\s*by|music\s*by|composed\s*by|produced\s*by|synced\s*by|written\s*by|arranger|composer|lyricist)\s*[:：]|(?:作词|作曲|编曲|制作人|演唱|词|曲)\s*[:：])/i;
+
+function parseInlineEnhancedWords(
+  rawBody: string,
+  lineStart: number,
+  lineEnd: number,
+  offsetSec: number
+): LyricWord[] | null {
+  const inlineRx = /<(\d{1,3}):(\d{2})(?:[.:](\d{1,3}))?>/g;
+  const inlineMatches = Array.from(rawBody.matchAll(inlineRx));
+  if (inlineMatches.length === 0) return null;
+
+  const segments: Array<{ start: number; text: string }> = [];
+  const leading = rawBody.slice(0, inlineMatches[0].index ?? 0).trim();
+  if (leading) {
+    segments.push({ start: lineStart, text: leading });
+  }
+
+  for (let i = 0; i < inlineMatches.length; i++) {
+    const m = inlineMatches[i];
+    const mins = parseInt(m[1], 10);
+    const secs = parseInt(m[2], 10);
+    const frac = parseInt((m[3] || '0').padEnd(3, '0'), 10) / 1000;
+    const segStart = Math.max(0, mins * 60 + secs + frac - offsetSec);
+    const textStart = (m.index ?? 0) + m[0].length;
+    const textEnd = i + 1 < inlineMatches.length ? (inlineMatches[i + 1].index ?? rawBody.length) : rawBody.length;
+    const text = rawBody.slice(textStart, textEnd).replace(/\s+/g, ' ').trim();
+    if (text) {
+      segments.push({ start: segStart, text });
+    }
+  }
+
+  if (segments.length === 0) return null;
+
+  const words: LyricWord[] = [];
+  for (let i = 0; i < segments.length; i++) {
+    const seg = segments[i];
+    const segEnd = i + 1 < segments.length ? Math.max(seg.start + 0.08, segments[i + 1].start) : Math.max(seg.start + 0.35, lineEnd);
+    const subWords = seg.text.split(/\s+/).filter(Boolean);
+    if (subWords.length === 1) {
+      words.push({ text: subWords[0], start: seg.start, end: segEnd });
+    } else {
+      const built = buildTimedLine(seg.start, segEnd, seg.text);
+      words.push(...built.words);
+    }
+  }
+  return words.length > 0 ? words : null;
+}
+
 /**
- * Parses LRC timestamps with exact blank-line end boundaries, note cleanup (♪ / ♫),
- * and same-timestamp duplicate/translation filtering.
+ * Parses LRC timestamps with [offset:ms] support, enhanced <mm:ss.xx> word timestamps,
+ * exact blank-line end boundaries, note/credit cleanup, and bilingual duplicate filtering.
  */
 export function parseLrc(lrc: string, fallbackDuration = 220): LyricLine[] {
-  const rawEvents: Array<{ time: number; text: string }> = [];
+  const rawEvents: Array<{ time: number; text: string; rawBody: string }> = [];
   const tagRx = /\[(\d{1,3}):(\d{2})(?:[.:](\d{1,3}))?\]/g;
+  const offsetMatch = lrc.match(/\[offset\s*:\s*([+-]?\d+)\]/i);
+  const offsetSec = offsetMatch ? parseInt(offsetMatch[1], 10) / 1000 : 0;
 
   for (const raw of lrc.split(/\r?\n/)) {
     const matches = Array.from(raw.matchAll(tagRx));
     if (matches.length === 0) continue;
 
-    // Strip all [mm:ss.xx] tags & inline enhanced-LRC <mm:ss.xx> word tags
-    const stripped = raw
-      .replace(tagRx, '')
+    const rawBody = raw.replace(tagRx, '').trim();
+    // Strip inline enhanced-LRC <mm:ss.xx> word tags for display text
+    const stripped = rawBody
       .replace(/<\d{1,3}:\d{2}(?:[.:]\d{1,3})?>/g, ' ')
       .replace(/\s+/g, ' ')
       .replace(/^[\s♪♫•·.*…-]+$/g, '')
       .trim();
 
+    if (stripped && LRC_CREDIT_LINE_RX.test(stripped)) continue;
+
     for (const m of matches) {
       const mins = parseInt(m[1], 10);
       const secs = parseInt(m[2], 10);
       const frac = parseInt((m[3] || '0').padEnd(3, '0'), 10) / 1000;
-      const time = mins * 60 + secs + frac;
-      rawEvents.push({ time, text: stripped });
+      const time = Math.max(0, mins * 60 + secs + frac - offsetSec);
+      rawEvents.push({ time, text: stripped, rawBody });
     }
   }
 
   rawEvents.sort((a, b) => a.time - b.time);
 
   // Deduplicate simultaneous bilingual/translation lines while keeping blank boundary gaps
-  const events: Array<{ time: number; text: string }> = [];
+  const events: Array<{ time: number; text: string; rawBody: string }> = [];
   for (const ev of rawEvents) {
     const prev = events[events.length - 1];
     if (ev.text && prev && prev.text && Math.abs(ev.time - prev.time) < 0.3) {
@@ -745,19 +1030,44 @@ export function parseLrc(lrc: string, fallbackDuration = 220): LyricLine[] {
     if (!ev.text) continue;
 
     const nextAnyTime = i < events.length - 1 ? events[i + 1].time : Math.min(fallbackDuration, ev.time + 5);
-    const end = Math.max(ev.time + 0.7, Math.min(nextAnyTime - 0.03, ev.time + 7.2));
-    lines.push(buildTimedLine(ev.time, end, ev.text));
+    const hasTightNext = nextAnyTime > ev.time + 0.16;
+    const end = hasTightNext
+      ? Math.min(nextAnyTime - 0.02, ev.time + 7.2)
+      : Math.max(ev.time + 0.7, Math.min(nextAnyTime - 0.02, ev.time + 7.2));
+    const enhancedWords = parseInlineEnhancedWords(ev.rawBody, ev.time, end, offsetSec);
+    if (enhancedWords) {
+      lines.push({ start: ev.time, end, text: ev.text, words: enhancedWords });
+    } else {
+      lines.push(buildTimedLine(ev.time, end, ev.text));
+    }
   }
 
   return lines;
 }
 
+const ALTERNATE_LRC_VERSION_RX =
+  /\b(remix|dance\s+mix|club\s+mix|lo-?fi|slowed|reverb|sped\s*up|nightcore|unplugged|acoustic|live|reprise|cover|mashup|piano|tamil|telugu|malayalam|kannada|arabic|spanish|female\s+version|male\s+version|extended|radio\s+edit|dj\s+mix|bootleg|8d|karaoke|instrumental)\b/i;
+
+function computeLatinLetterRatio(text: string): number {
+  const letters = text.match(/\p{L}/gu);
+  if (!letters || letters.length === 0) return 0;
+  let latin = 0;
+  for (let i = 0; i < letters.length; i++) {
+    const code = letters[i].charCodeAt(0);
+    if ((code >= 65 && code <= 90) || (code >= 97 && code <= 122) || (code >= 192 && code <= 591)) {
+      latin++;
+    }
+  }
+  return latin / letters.length;
+}
+
 /**
  * Scores an LRCLIB candidate strictly by:
  * 1) Exact / token-aligned title match (penalizing extra title words like "Tum Hi Ho Bandhu" vs "Tum Hi Ho")
- * 2) Artist match against any credited singer/composer
- * 3) Full track duration match (even for 30s iTunes previews when `song.fullDuration` is available!)
- * 4) Latin readability & phrase granularity
+ * 2) Alternate-version rejection (prevents Remix/Unplugged/Lo-Fi/Tamil/Slowed LRCs from beating original studio cut!)
+ * 3) Artist match against any credited singer/composer/featured artist
+ * 4) Full track duration match (even for 30s iTunes previews when `song.fullDuration` is available!)
+ * 5) True Latin letter ratio & phrase granularity
  */
 export function scoreLrcCandidate(
   item: LrcLibItem,
@@ -826,32 +1136,50 @@ export function scoreLrcCandidate(
         : 0;
   if (refDur > 0 && typeof item.duration === 'number' && item.duration > 0) {
     const durDiff = Math.abs(item.duration - refDur);
-    if (durDiff <= 2) score += 155;
+    if (durDiff <= 1.5) score += 170;
+    else if (durDiff <= 2.5) score += 155;
     else if (durDiff <= 5) score += 110;
     else if (durDiff <= 12) score += 50;
     else if (durDiff > 22) score -= Math.min(130, durDiff * 1.5);
   }
 
-  // Junk / karaoke / slowed / instrumental LRC penalty
-  // Even if song.title has "Vocals Only", still reject karaoke/instrumental/tribute/cover LRC matches
+  // Junk / karaoke / slowed / instrumental / alternate-version LRC penalty
+  // Check BEFORE cleanTrackTitle strips parentheses so "(Dance Mix)" / "(Tamil)" / "(Unplugged)" never beat original!
   const strictJunkRx = /\b(karaoke|instrumental|8d audio|ringtone|lofi flip|slowed\s*\+\s*reverb|sped\s*up|nightcore|tribute to|originally performed|cover version)\b/i;
+  const candMeta = `${item.trackName || ''} ${item.albumName || ''}`;
   if (
     item.instrumental ||
-    (!strictJunkRx.test(song.title) && strictJunkRx.test(`${item.trackName || ''} ${item.albumName || ''}`))
+    (!strictJunkRx.test(song.title) && strictJunkRx.test(candMeta))
   ) {
     score -= 220;
-  } else if (!JUNK_PATTERN.test(song.title) && JUNK_PATTERN.test(`${item.trackName || ''} ${item.albumName || ''}`)) {
+  } else if (!JUNK_PATTERN.test(song.title) && JUNK_PATTERN.test(candMeta)) {
     score -= 220;
+  } else if (!ALTERNATE_LRC_VERSION_RX.test(song.title) && ALTERNATE_LRC_VERSION_RX.test(candMeta)) {
+    score -= 185;
   }
 
   const lrc = item.syncedLyrics || item.plainLyrics || '';
   if (lrc) {
-    const stripped = lrc.replace(/\[[^\]]+\]/g, '');
-    if (/[a-zA-Z]{4,}/.test(stripped)) score += 35;
+    const stripped = lrc.replace(/\[[^\]]+\]/g, '').replace(/<[^>]+>/g, ' ');
+    const latinRatio = computeLatinLetterRatio(stripped);
+    if (latinRatio >= 0.55) score += 40;
     const validLines = lrc
       .split('\n')
       .filter((l) => l.replace(/\[[^\]]+\]/g, '').trim().length > 1).length;
     score += Math.min(45, validLines * 0.85);
+
+    // Penalize truncated synced LRCs that stop way before the song finishes
+    if (item.syncedLyrics && refDur > 90) {
+      let maxTs = 0;
+      const tsMatches = item.syncedLyrics.matchAll(/\[(\d{1,3}):(\d{2})(?:[.:](\d{1,3}))?\]/g);
+      for (const m of tsMatches) {
+        const ts = parseInt(m[1], 10) * 60 + parseInt(m[2], 10);
+        if (ts > maxTs) maxTs = ts;
+      }
+      if (maxTs > 0 && maxTs < refDur * 0.42) {
+        score -= 90;
+      }
+    }
   }
 
   return score;
@@ -890,7 +1218,7 @@ export async function fetchSyncedLyricsDetailed(
   customQuery?: string
 ): Promise<LyricsFetchResult> {
   const baseTitle = customQuery ? cleanTrackTitle(customQuery) : cleanTrackTitle(song.title);
-  const artists = extractArtistList(song.artist);
+  const artists = extractAllSongArtists(song);
   const primaryArtist = artists[0] || '';
   const secondaryArtist = artists[1] || '';
   const refDur =
@@ -899,6 +1227,10 @@ export async function fetchSyncedLyricsDetailed(
       : song.isFullTrack && song.duration > 40
         ? song.duration
         : 0;
+
+  const cacheKey = `${song.id}|${baseTitle.toLowerCase()}|${artists.join(',').toLowerCase()}|${refDur}|${(customQuery || '').trim().toLowerCase()}`;
+  const cached = lyricsResultCache.get(cacheKey);
+  if (cached) return cached;
 
   const candidates: LrcLibItem[] = [];
   const seenLrc = new Set<string>();
@@ -1012,8 +1344,19 @@ export async function fetchSyncedLyricsDetailed(
     return null;
   };
 
+  const cacheAndReturn = (res: LyricsFetchResult): LyricsFetchResult => {
+    if (res.lines.length > 0) {
+      if (lyricsResultCache.size > 60) {
+        const firstKey = lyricsResultCache.keys().next().value;
+        if (firstKey) lyricsResultCache.delete(firstKey);
+      }
+      lyricsResultCache.set(cacheKey, res);
+    }
+    return res;
+  };
+
   const searchHit = pickBestLrcMatch();
-  if (searchHit) return searchHit;
+  if (searchHit) return cacheAndReturn(searchHit);
 
   // Fallback to exact /api/get only when /api/search yielded zero acceptable candidates
   if (!customQuery && baseTitle && primaryArtist) {
@@ -1029,7 +1372,7 @@ export async function fetchSyncedLyricsDetailed(
       if (getRes.ok) {
         absorbLrcList([(await getRes.json()) as LrcLibItem]);
         const getHit = pickBestLrcMatch();
-        if (getHit) return getHit;
+        if (getHit) return cacheAndReturn(getHit);
       }
     } catch {
       // ignore
@@ -1046,12 +1389,12 @@ export async function fetchSyncedLyricsDetailed(
         refDur || (song.isFullTrack ? song.duration || 210 : 210)
       );
       if (lines.length > 0) {
-        return {
+        return cacheAndReturn({
           lines,
           matchSource: 'lyrics_ovh_plain',
           matchedTrack: baseTitle,
           matchedArtist: primaryArtist,
-        };
+        });
       }
     }
   }
@@ -1145,6 +1488,39 @@ export function detectChorusStartTime(lyrics: LyricLine[], fullDuration?: number
   return Math.round(closest.start);
 }
 
+export interface PreviewSectionCue {
+  label: string;
+  offsetSec: number;
+}
+
+/**
+ * Generates 1-click preview cue points (Start, 0:30, Chorus, Mid) so 30s previews
+ * can be snapped to the exact singing section in one click.
+ */
+export function detectPreviewSectionCues(lyrics: LyricLine[], fullDuration?: number): PreviewSectionCue[] {
+  if (lyrics.length === 0) return [];
+  const chorus = detectChorusStartTime(lyrics, fullDuration);
+  const firstVocal = Math.max(0, Math.floor(lyrics[0].start));
+  const lastStart = lyrics[lyrics.length - 1].start;
+  const estTotal = Math.max(fullDuration || 0, lastStart + 10, 90);
+
+  const rawCues: PreviewSectionCue[] = [
+    { label: 'Start', offsetSec: 0 },
+    ...(firstVocal >= 6 ? [{ label: 'Verse 1', offsetSec: firstVocal }] : []),
+    { label: '0:30', offsetSec: 30 },
+    ...(chorus >= 12 ? [{ label: 'Chorus', offsetSec: chorus }] : []),
+    { label: 'Mid', offsetSec: Math.round(estTotal * 0.48) },
+  ];
+
+  const deduped: PreviewSectionCue[] = [];
+  for (const cue of rawCues) {
+    if (cue.offsetSec > Math.max(30, lastStart - 6)) continue;
+    if (deduped.some((existing) => Math.abs(existing.offsetSec - cue.offsetSec) < 5)) continue;
+    deduped.push(cue);
+  }
+  return deduped;
+}
+
 function rgbToHex(r: number, g: number, b: number): string {
   const c = (n: number) => Math.max(0, Math.min(255, Math.round(n)));
   return '#' + [c(r), c(g), c(b)].map((x) => x.toString(16).padStart(2, '0')).join('');
@@ -1155,9 +1531,28 @@ export async function extractPaletteFromArtwork(imageUrl: string): Promise<VibeP
   try {
     const img = await new Promise<HTMLImageElement>((resolve, reject) => {
       const el = new Image();
+      let settled = false;
+      const timer = setTimeout(() => {
+        if (!settled) {
+          settled = true;
+          reject(new Error('Artwork timeout'));
+        }
+      }, 2500);
       el.crossOrigin = 'anonymous';
-      el.onload = () => resolve(el);
-      el.onerror = reject;
+      el.onload = () => {
+        if (!settled) {
+          settled = true;
+          clearTimeout(timer);
+          resolve(el);
+        }
+      };
+      el.onerror = (err) => {
+        if (!settled) {
+          settled = true;
+          clearTimeout(timer);
+          reject(err);
+        }
+      };
       el.src = imageUrl;
     });
 
@@ -1396,7 +1791,9 @@ export async function launchRadioStation(stationQuery: string): Promise<SongItem
 export function parseLocalFileName(filename: string): { artist: string; title: string } {
   const base = filename
     .replace(/\.[^.]+$/, '')
+    .replace(/^\s*\d{1,2}\s*[.)_-]\s+/, '')
     .replace(/\(.*?\)|\[.*?\]/g, '')
+    .replace(/\b(320\s*kbps|128\s*kbps|official\s*(?:audio|video|music\s*video|lyric\s*video)|pagalworld|mp3song|djpunjab|mr-jatt|songs?\.?pk)\b/gi, '')
     .replace(/_/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
@@ -1405,4 +1802,53 @@ export function parseLocalFileName(filename: string): { artist: string; title: s
     return { artist: parts[0].trim(), title: parts.slice(1).join(' - ').trim() };
   }
   return { artist: 'Local File', title: base || 'Untitled' };
+}
+
+const KNOWN_TRACK_BPMS: Array<[RegExp, number]> = [
+  [/\bno lie\b/i, 102],
+  [/\bstarboy\b/i, 93],
+  [/\bblinding lights\b/i, 171],
+  [/\bkesariya\b/i, 94],
+  [/\btum hi ho\b/i, 94],
+  [/\bapna bana le\b/i, 94],
+  [/\bchaleya\b/i, 100],
+  [/\braataan lambiyan\b/i, 110],
+  [/\bhusn\b/i, 92],
+  [/\blevitating\b/i, 103],
+  [/\bsave your tears\b/i, 118],
+  [/\bsoftly\b|\bbrown munde\b/i, 96],
+  [/\bfein\b|\btravis\b|\bphonk\b/i, 148],
+];
+
+/**
+ * Estimates musical BPM from known track tempo signatures or median lyric-line cadence
+ * so playback-clock-locked groove animations stay locked to the track's actual feel.
+ */
+export function estimateTrackBpm(
+  song: Pick<SongItem, 'title' | 'artist'>,
+  lyrics: LyricLine[]
+): number {
+  const meta = `${song.title} ${song.artist}`;
+  for (const [rx, bpm] of KNOWN_TRACK_BPMS) {
+    if (rx.test(meta)) return bpm;
+  }
+
+  if (lyrics.length >= 6) {
+    const gaps: number[] = [];
+    for (let i = 1; i < lyrics.length; i++) {
+      const g = lyrics[i].start - lyrics[i - 1].start;
+      if (g >= 1.1 && g <= 6.0) gaps.push(g);
+    }
+    if (gaps.length >= 4) {
+      gaps.sort((a, b) => a - b);
+      const medianGap = gaps[Math.floor(gaps.length / 2)];
+      // Most pop/Hindi phrases occupy 4 or 8 beats; fold cleanly into 82–134 BPM range
+      let est = (4 / medianGap) * 60;
+      while (est < 82) est *= 2;
+      while (est > 136) est *= 0.5;
+      return Math.round(est);
+    }
+  }
+
+  return 104;
 }

@@ -7,14 +7,21 @@ export interface LyricCursorState {
   activeWordIdx: number;
   upcomingLineIdx: number;
   secondsUntilNext: number;
+  lineProgress: number;
+  wordProgress: number;
   phase: LyricPhase;
 }
 
 const VOCAL_ANTICIPATION_SEC = 0.14;
 
+function clamp01(v: number): number {
+  return v <= 0 ? 0 : v >= 1 ? 1 : v;
+}
+
 /**
- * Computes the exact active line, active word, and intro/interlude preview state.
- * Holds lines gracefully across short breath gaps (< 2.5s) so visuals never flash back
+ * Computes the exact active line, active word, continuous sub-frame progress,
+ * and intro/interlude preview state.
+ * Holds lines gracefully across short breath gaps (<= 2.6s) so visuals never flash back
  * to an intro screen mid-verse, while surfacing upcoming lines during intros & long solos.
  */
 export function computeLyricCursor(
@@ -28,11 +35,15 @@ export function computeLyricCursor(
       activeWordIdx: -1,
       upcomingLineIdx: -1,
       secondsUntilNext: 0,
+      lineProgress: 0,
+      wordProgress: 0,
       phase: 'none',
     };
   }
 
-  const t = currentTimeSec + lyricOffsetSec + VOCAL_ANTICIPATION_SEC;
+  const safeCur = Number.isFinite(currentTimeSec) ? currentTimeSec : 0;
+  const safeOff = Number.isFinite(lyricOffsetSec) ? lyricOffsetSec : 0;
+  const t = safeCur + safeOff + VOCAL_ANTICIPATION_SEC;
 
   // Before the first lyric starts -> Intro phase with upcoming line 0 visible
   if (t < lyrics[0].start) {
@@ -41,15 +52,23 @@ export function computeLyricCursor(
       activeWordIdx: -1,
       upcomingLineIdx: 0,
       secondsUntilNext: Math.max(0, lyrics[0].start - t),
+      lineProgress: 0,
+      wordProgress: 0,
       phase: 'intro',
     };
   }
 
+  // Binary search for the latest line with start <= t (O(log N) in hot rAF loop)
+  let lo = 0;
+  let hi = lyrics.length - 1;
   let candidateIdx = -1;
-  for (let i = lyrics.length - 1; i >= 0; i--) {
-    if (t >= lyrics[i].start) {
-      candidateIdx = i;
-      break;
+  while (lo <= hi) {
+    const mid = (lo + hi) >>> 1;
+    if (lyrics[mid].start <= t) {
+      candidateIdx = mid;
+      lo = mid + 1;
+    } else {
+      hi = mid - 1;
     }
   }
 
@@ -59,6 +78,8 @@ export function computeLyricCursor(
       activeWordIdx: -1,
       upcomingLineIdx: 0,
       secondsUntilNext: Math.max(0, lyrics[0].start - t),
+      lineProgress: 0,
+      wordProgress: 0,
       phase: 'intro',
     };
   }
@@ -86,11 +107,25 @@ export function computeLyricCursor(
     }
     if (wordIdx === -1 && words.length > 0) wordIdx = 0;
 
+    const lineSpanEnd =
+      words.length > 0 ? Math.max(line.end, words[words.length - 1].end) : line.end;
+    const lineDur = Math.max(0.15, lineSpanEnd - line.start);
+    const lineProgress = clamp01((t - line.start) / lineDur);
+
+    let wordProgress = lineProgress;
+    if (wordIdx >= 0 && words[wordIdx]) {
+      const w = words[wordIdx];
+      const wDur = Math.max(0.06, w.end - w.start);
+      wordProgress = clamp01((t - w.start) / wDur);
+    }
+
     return {
       activeLineIdx: candidateIdx,
       activeWordIdx: wordIdx,
       upcomingLineIdx: hasNext ? candidateIdx + 1 : -1,
       secondsUntilNext: nextLine ? Math.max(0, nextLine.start - t) : 0,
+      lineProgress,
+      wordProgress,
       phase: 'active',
     };
   }
@@ -101,6 +136,8 @@ export function computeLyricCursor(
       activeWordIdx: -1,
       upcomingLineIdx: candidateIdx + 1,
       secondsUntilNext: Math.max(0, nextLine.start - t),
+      lineProgress: 0,
+      wordProgress: 0,
       phase: 'interlude',
     };
   }
@@ -110,6 +147,8 @@ export function computeLyricCursor(
     activeWordIdx: -1,
     upcomingLineIdx: -1,
     secondsUntilNext: 0,
+    lineProgress: 1,
+    wordProgress: 1,
     phase: 'outro',
   };
 }

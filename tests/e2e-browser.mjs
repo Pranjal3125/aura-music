@@ -1,9 +1,12 @@
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { spawn } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, existsSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+
+const CAPTURE_DIR = process.env.AURA_CAPTURE_SCREENSHOTS_DIR || '';
+if (CAPTURE_DIR) mkdirSync(CAPTURE_DIR, { recursive: true });
 
 const CHROME_PATH = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
 const DIST_DIR = path.resolve('dist');
@@ -330,6 +333,30 @@ try {
         } else {
           await respondJson([]);
         }
+      } else if (url.includes('saavn.sumit.co')) {
+        const parsedSaavn = new URL(url);
+        const q = (parsedSaavn.searchParams.get('query') || '').toLowerCase();
+        if (q.includes('tum hi ho')) {
+          await respondJson({
+            success: true,
+            data: {
+              results: [
+                {
+                  id: 'sv-tumhiho',
+                  name: 'Tum Hi Ho',
+                  duration: 262,
+                  playCount: 95000000,
+                  album: { name: 'Aashiqui 2' },
+                  artists: { primary: [{ name: 'Mithoon' }, { name: 'Arijit Singh' }] },
+                  image: [{ quality: '500x500', url: '' }],
+                  downloadUrl: [{ quality: '320kbps', url: `${baseUrl}mock-audio.wav` }],
+                },
+              ],
+            },
+          });
+        } else {
+          await respondJson({ success: true, data: { results: [] } });
+        }
       } else if (url.includes('api.lyrics.ovh')) {
         await respondJson({ lyrics: '' });
       } else {
@@ -441,6 +468,10 @@ try {
   await delay(200);
 
   const homeText = await client.evalExpr('document.body.innerText');
+  if (CAPTURE_DIR) {
+    const shot = await client.send('Page.captureScreenshot', { format: 'png' });
+    writeFileSync(path.join(CAPTURE_DIR, 'home-screen.png'), Buffer.from(shot.data, 'base64'));
+  }
   assert.ok(homeText.includes('AURA'), `Home should show AURA title: ${homeText}`);
   assert.ok(homeText.includes('Verci × Lumn'), `Home should show Verci × Lumn preset: ${homeText}`);
   assert.ok(/play instantly/i.test(homeText), `Home should show Play Instantly grid: ${homeText}`);
@@ -592,6 +623,10 @@ try {
     /no lie|feel your eyes|next lyric up/i.test(playingBody),
     `Expected visible lyrics or upcoming preview, got: ${playingBody}`
   );
+  if (CAPTURE_DIR) {
+    const shot = await client.send('Page.captureScreenshot', { format: 'png' });
+    writeFileSync(path.join(CAPTURE_DIR, 'stage-nolie-apple-pay.png'), Buffer.from(shot.data, 'base64'));
+  }
 
   // 4. Switch visual worlds (Fisheye, Constellation, Cyber) and verify Cyber preserves the EXACT canvas DOM node across auto-advance rollover!
   for (const worldLabel of ['Fisheye', 'Constellation', 'Cyber']) {
@@ -660,8 +695,8 @@ try {
   assert.equal(afterAutoEnded.cyberActive, true, 'Cyber must NOT revert to Apple UI after audio ended auto-advance');
   assert.ok(afterAutoEnded.text.includes('Kesariya'), `Expected ended rollover to advance to Kesariya, got: ${afterAutoEnded.text}`);
   assert.ok(
-    afterAutoEnded.text.includes('Auto-synced at 0:54'),
-    `Kesariya must auto-sync at primary chorus 0:54, NOT outro 3:36: ${afterAutoEnded.text}`
+    afterAutoEnded.text.includes('Studio-calibrated sync at 0:49') || afterAutoEnded.text.includes('+49.0s'),
+    `Kesariya must studio-calibrate at 0:49, NOT outro 3:36: ${afterAutoEnded.text}`
   );
   assert.equal(
     requestedUrls.some((u) => u.includes('lrclib.net/api/get') && u.toLowerCase().includes('kesariya')),
@@ -673,13 +708,84 @@ try {
   await client.evalExpr(`
     Array.from(document.querySelectorAll('button')).find(b => b.innerText.trim() === 'Apple UI')?.click();
   `);
-  await delay(150);
+  await delay(220);
 
-  // 5. Open Lyrics Drawer AND type in compact SearchBar -> verify Search dropdown is ON TOP of drawer (zero overlap!)
-  await client.evalExpr(`
-    document.querySelector('button[title*="Lyrics Timeline"]')?.click();
+  // 4b. Verify zero per-frame root CSS var thrash + active GPU leaf-ref Lumn edge lighting!
+  const edgePerfCheck = await client.evalExpr(`
+    (() => {
+      const rootChild = document.querySelector('#root')?.firstElementChild;
+      const rim = document.querySelector('.aura-edge-rim');
+      const beat = document.querySelector('.aura-edge-beat-flash');
+      const bloom = document.querySelector('.aura-edge-bloom');
+      return {
+        hasLegacyGlowVar: Boolean(rootChild?.style?.getPropertyValue('--aura-glow-alpha')),
+        hasLegacyPulseVar: Boolean(rootChild?.style?.getPropertyValue('--aura-pulse-alpha')),
+        hasFilmGrain: Boolean(document.querySelector('.aura-film-grain')),
+        rimOpacity: rim?.style?.opacity || '',
+        beatOpacity: beat?.style?.opacity || '',
+        bloomOpacity: bloom?.style?.opacity || '',
+      };
+    })()
   `);
+  assert.equal(edgePerfCheck.hasLegacyGlowVar, false, `Legacy root --aura-glow-alpha must NOT be mutated per frame: ${JSON.stringify(edgePerfCheck)}`);
+  assert.equal(edgePerfCheck.hasLegacyPulseVar, false, `Legacy root --aura-pulse-alpha must NOT be mutated per frame: ${JSON.stringify(edgePerfCheck)}`);
+  assert.equal(edgePerfCheck.hasFilmGrain, false, 'Heavy SVG feTurbulence .aura-film-grain must be removed');
+  assert.ok(parseFloat(edgePerfCheck.rimOpacity) > 0.4, `Leaf .aura-edge-rim must be actively driven via inline opacity: ${JSON.stringify(edgePerfCheck)}`);
+  assert.ok(edgePerfCheck.beatOpacity !== '', `Leaf .aura-edge-beat-flash must be wired to rAF: ${JSON.stringify(edgePerfCheck)}`);
+
+  if (CAPTURE_DIR) {
+    const shot = await client.send('Page.captureScreenshot', { format: 'png' });
+    writeFileSync(path.join(CAPTURE_DIR, 'stage-apple-ui.png'), Buffer.from(shot.data, 'base64'));
+  }
+
+  // 4c. Click Synced / Tap-Sync button on 30s preview -> verify drawer opens with coarse -5s/+5s, Jump cues, Replay, and tap-to-lock!
+  const tappedSyncBtn = await client.evalExpr(`
+    (() => {
+      const btn = Array.from(document.querySelectorAll('button')).find(b => {
+        const t = b.innerText.trim();
+        return t === 'Tap-Sync' || t === 'Synced';
+      });
+      if (!btn) return false;
+      btn.click();
+      return true;
+    })()
+  `);
+  assert.equal(tappedSyncBtn, true, '30s preview dock must surface 1-click Synced/Tap-Sync button');
   await delay(250);
+  const drawerSyncControls = await client.evalExpr(`
+    (() => {
+      const text = document.body.innerText;
+      return {
+        hasCoarseMinus: text.includes('-5s'),
+        hasCoarsePlus: text.includes('+5s'),
+        hasReplay: text.includes('Replay'),
+        hasJump: text.includes('JUMP:') || text.includes('Jump:'),
+      };
+    })()
+  `);
+  assert.equal(drawerSyncControls.hasCoarseMinus, true, `Expected -5s coarse sync button: ${JSON.stringify(drawerSyncControls)}`);
+  assert.equal(drawerSyncControls.hasCoarsePlus, true, `Expected +5s coarse sync button: ${JSON.stringify(drawerSyncControls)}`);
+  assert.equal(drawerSyncControls.hasReplay, true, `Expected Replay button in sync drawer: ${JSON.stringify(drawerSyncControls)}`);
+  assert.equal(drawerSyncControls.hasJump, true, `Expected 1-click Jump section cues: ${JSON.stringify(drawerSyncControls)}`);
+
+  // Tap Kesariya chorus line in drawer to lock exact sync
+  await client.evalExpr(`
+    (() => {
+      const btn = Array.from(document.querySelectorAll('button')).find(b => b.innerText.includes('Kesariya tera ishq hai piya'));
+      btn?.click();
+    })()
+  `);
+  await delay(220);
+  const lockedState = await client.evalExpr(`
+    (() => {
+      const text = document.body.innerText;
+      return { hasLockedBadge: text.includes('LOCKED'), hasSyncedDockBtn: text.includes('Synced') };
+    })()
+  `);
+  assert.equal(lockedState.hasLockedBadge, true, `Expected LOCKED badge after tap-to-sync: ${JSON.stringify(lockedState)}`);
+  assert.equal(lockedState.hasSyncedDockBtn, true, `Expected dock pill to switch to Synced: ${JSON.stringify(lockedState)}`);
+
+  // 5. With Lyrics Drawer already open, type in compact SearchBar -> verify Search dropdown is ON TOP of drawer (zero overlap!)
   await client.evalExpr(`
     const inp = document.querySelector('input[placeholder*="Search song"]');
     const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
@@ -713,6 +819,10 @@ try {
     compText.includes('Kesariya') && compText.includes('Kesariya tera ishq hai piya'),
     `Companion screen failed to render synced Kesariya snapshot: ${compText}`
   );
+  if (CAPTURE_DIR) {
+    const shot = await client.send('Page.captureScreenshot', { format: 'png' });
+    writeFileSync(path.join(CAPTURE_DIR, 'companion-screen.png'), Buffer.from(shot.data, 'base64'));
+  }
 
   assert.deepEqual(pageErrors, [], `Unexpected page runtime errors: ${JSON.stringify(pageErrors)}`);
   assert.deepEqual(consoleErrors, [], `Unexpected console errors during session: ${JSON.stringify(consoleErrors)}`);

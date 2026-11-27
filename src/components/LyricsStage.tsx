@@ -1,7 +1,7 @@
-import React from 'react';
+import React, { useEffect, useRef } from 'react';
 import { Disc3, Radio, Search, Sparkles } from 'lucide-react';
-import { LyricLine, SongItem, VibeBlueprint } from '../types';
-import { AudioPulseState, CanvasLyricMode, CosmosLyricsCanvas } from './CosmosLyricsCanvas';
+import { AudioPulseState, LyricLine, SongItem, VibeBlueprint } from '../types';
+import { CanvasLyricMode, CosmosLyricsCanvas } from './CosmosLyricsCanvas';
 import { AppleUiLyricsStage } from './AppleUiLyricsStage';
 import { FisheyeLyricsStage } from './FisheyeLyricsStage';
 import { getWordVisualIcon, type LyricPhase } from '../services/lyricSync';
@@ -37,7 +37,7 @@ function fmtCountdown(sec: number): string {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 }
 
-export const LyricsStage: React.FC<LyricsStageProps> = ({
+export const LyricsStage: React.FC<LyricsStageProps> = React.memo(({
   song,
   lyrics,
   lyricsLoading,
@@ -53,8 +53,34 @@ export const LyricsStage: React.FC<LyricsStageProps> = ({
   onJumpToTime,
   onOpenLyricsSearch,
 }) => {
+  const domPulseRef = useRef<HTMLDivElement | null>(null);
   const { primary, secondary, accent } = blueprint.palette;
   const style = blueprint.lyricStyle;
+
+  const isDomReactiveWorld =
+    style === 'kinetic' || style === 'liquid' || style === 'editorial' || style === 'codestyle';
+
+  useEffect(() => {
+    if (!isDomReactiveWorld) return;
+    let rafId = 0;
+    let lastSc = -1;
+    let lastTy = -999;
+    const tick = () => {
+      rafId = requestAnimationFrame(tick);
+      if (document.hidden || !domPulseRef.current) return;
+      const p = audioPulseRef.current;
+      const voc = p.vocal ?? p.mid;
+      const sc = Math.round((1 + p.beat * 0.022 + voc * 0.008) * 250) / 250;
+      const ty = Math.round((-p.beat * 2.5) * 10) / 10;
+      if (sc !== lastSc || ty !== lastTy) {
+        lastSc = sc;
+        lastTy = ty;
+        domPulseRef.current.style.transform = `translate3d(0, ${ty.toFixed(1)}px, 0) scale(${sc.toFixed(3)})`;
+      }
+    };
+    rafId = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(rafId);
+  }, [isDomReactiveWorld, audioPulseRef]);
 
   const hasLyrics = lyrics.length > 0;
   const currentLine = hasLyrics && activeLineIdx >= 0 ? lyrics[activeLineIdx] : null;
@@ -75,9 +101,10 @@ export const LyricsStage: React.FC<LyricsStageProps> = ({
 
   const isCanvasWorld = CANVAS_WORLDS.includes(style);
   const isLiveStream = song.source === 'live_tab' || song.source === 'live_mic';
+  const showLiveOnlyCard = isLiveStream && !hasLyrics;
 
   // Flagship Viral Reel Mode: Apple UI (iMessage + Apple Pay + Dynamic Island + Frosted Cards)
-  if (hasLyrics && !isLiveStream && style === 'apple_ui') {
+  if (hasLyrics && style === 'apple_ui') {
     return (
       <AppleUiLyricsStage
         song={song}
@@ -101,12 +128,12 @@ export const LyricsStage: React.FC<LyricsStageProps> = ({
       ? Math.min(100, Math.max(4, ((Math.max(0, activeWordIdx) + 1) / currentLine.words.length) * 100))
       : 100;
 
-  const showCanvasBg = isCanvasWorld && !isLiveStream;
+  const showCanvasBg = isCanvasWorld && !showLiveOnlyCard;
 
   return (
     <div
       className={`relative z-10 w-full h-full flex flex-col items-center justify-center select-none ${
-        !hasLyrics || isLiveStream ? 'px-6 text-center' : 'px-6 sm:px-12 pt-14 pb-28'
+        !hasLyrics ? 'px-6 text-center' : 'px-6 sm:px-12 pt-14 pb-28'
       }`}
     >
       {/* 120FPS CANVAS WORLDS STAY CONTINUOUSLY MOUNTED ACROSS LOADING, ROLLOVERS, INTROS & OUTROS */}
@@ -122,8 +149,8 @@ export const LyricsStage: React.FC<LyricsStageProps> = ({
         />
       )}
 
-      {/* Live Audio Capture OR No Lyrics Available Yet -> Transition Card or Luxury Artwork */}
-      {(!hasLyrics || isLiveStream) &&
+      {/* Live Audio Capture (without lyrics) OR No Lyrics Available Yet -> Transition Card or Luxury Artwork */}
+      {!hasLyrics &&
         (showCanvasBg && lyricsLoading ? (
           <div className="relative z-10 oled-surface rounded-3xl px-6 py-5 flex items-center gap-4 border border-white/15 max-w-md w-full animate-panel-in">
             <div
@@ -149,8 +176,10 @@ export const LyricsStage: React.FC<LyricsStageProps> = ({
           <div className="relative z-10 flex flex-col items-center">
             <div className="relative mb-8 flex items-center justify-center">
               <div
-                className="absolute w-80 h-80 rounded-full blur-[95px] opacity-45 pointer-events-none"
-                style={{ backgroundColor: primary }}
+                className="absolute w-[420px] h-[420px] rounded-full opacity-55 pointer-events-none"
+                style={{
+                  background: `radial-gradient(circle, ${primary}66 0%, ${primary}22 36%, transparent 72%)`,
+                }}
               />
               <div
                 className="absolute w-72 h-72 rounded-full border pointer-events-none animate-aura-vinyl-pulse"
@@ -210,14 +239,14 @@ export const LyricsStage: React.FC<LyricsStageProps> = ({
                     ? 'Live Audio Edge Aura · Reacting in real time'
                     : 'No synced lyrics matched automatically'}
               </div>
-              {!lyricsLoading && !isLiveStream && onOpenLyricsSearch && (
+              {!lyricsLoading && onOpenLyricsSearch && (
                 <button
                   type="button"
                   onClick={onOpenLyricsSearch}
                   className="oled-pill px-3.5 py-1.5 rounded-full text-xs text-white/85 hover:text-white flex items-center gap-1.5 cursor-pointer"
                 >
                   <Search className="w-3.5 h-3.5" style={{ color: primary }} />
-                  <span>Find / Sync Lyrics Manually</span>
+                  <span>{isLiveStream ? 'Sync Lyrics to Live Audio' : 'Find / Sync Lyrics Manually'}</span>
                 </button>
               )}
             </div>
@@ -225,7 +254,7 @@ export const LyricsStage: React.FC<LyricsStageProps> = ({
         ))}
 
       {/* OUTRO HOLD FOR NON-APPLE-UI, NON-CANVAS MODES */}
-      {hasLyrics && !isLiveStream && !currentLine && !upcomingLine && !isCanvasWorld && (
+      {hasLyrics && !currentLine && !upcomingLine && !isCanvasWorld && (
         <div className="relative z-10 w-full max-w-xl flex flex-col items-center text-center space-y-3 animate-panel-in">
           <div className="text-[10px] font-mono-code uppercase tracking-[0.26em] text-white/40">
             Outro · {song.title}
@@ -240,7 +269,7 @@ export const LyricsStage: React.FC<LyricsStageProps> = ({
       )}
 
       {/* INTRO / INTERLUDE OVERLAY FOR NON-APPLE-UI MODES SO LYRICS ARE ALWAYS VISIBLE */}
-      {hasLyrics && !isLiveStream && !currentLine && upcomingLine && (
+      {hasLyrics && !currentLine && upcomingLine && (
         <div className="relative z-10 w-full max-w-2xl flex flex-col items-center text-center space-y-6 animate-panel-in">
           <div className="oled-surface rounded-3xl p-5 sm:p-6 flex items-center gap-4 border border-white/15 max-w-md w-full">
             <div
@@ -308,8 +337,8 @@ export const LyricsStage: React.FC<LyricsStageProps> = ({
 
       {/* KINETIC SLAM: Shockwave Halo + Spring Slam + Chromatic Echo + Watermark */}
       {currentLine && style === 'kinetic' && (
-        <div className="relative z-10 w-full max-w-5xl flex flex-col items-center text-center space-y-6">
-          <div className="text-sm sm:text-lg font-grotesk uppercase tracking-[0.18em] text-white/25 min-h-[24px] transition-all duration-300">
+        <div ref={domPulseRef} className="relative z-10 w-full max-w-5xl flex flex-col items-center text-center space-y-6 will-change-transform">
+          <div className="text-sm sm:text-lg font-grotesk uppercase tracking-[0.18em] text-white/25 min-h-[24px] transition-opacity duration-300">
             {prevLine?.text || ''}
           </div>
 
@@ -322,7 +351,7 @@ export const LyricsStage: React.FC<LyricsStageProps> = ({
               <div className="relative flex items-center justify-center py-4">
                 <span
                   aria-hidden
-                  className="absolute font-display text-6xl sm:text-8xl md:text-9xl font-black uppercase tracking-tighter opacity-[0.045] scale-125 pointer-events-none select-none blur-[1px]"
+                  className="absolute font-display text-6xl sm:text-8xl md:text-9xl font-black uppercase tracking-tighter opacity-[0.045] scale-125 pointer-events-none select-none"
                   style={{ color: primary }}
                 >
                   {word}
@@ -397,37 +426,27 @@ export const LyricsStage: React.FC<LyricsStageProps> = ({
         </div>
       )}
 
-      {/* LIQUID GLASS APPLE LYRICS + FLOATING BIOLUMINESCENT AURORAS */}
+      {/* LIQUID GLASS APPLE LYRICS + ZERO-BLUR GPU BIOLUMINESCENT AURORAS */}
       {currentLine && style === 'liquid' && (
         <>
-          {song.artworkUrl && (
+          <div className="fixed inset-0 pointer-events-none z-0 overflow-hidden contain-strict">
             <div
-              className="fixed inset-0 pointer-events-none z-0 opacity-30 scale-125"
+              className="absolute top-[10%] left-[10%] w-[52vw] h-[52vw] max-w-[640px] max-h-[640px] rounded-full opacity-35 animate-aura-float will-change-transform"
               style={{
-                backgroundImage: `url(${song.artworkUrl})`,
-                backgroundSize: 'cover',
-                backgroundPosition: 'center',
-                filter: 'blur(90px) saturate(175%)',
+                background: `radial-gradient(circle, ${primary}66 0%, ${primary}24 34%, ${primary}08 58%, transparent 74%)`,
               }}
             />
-          )}
-
-          <div className="fixed inset-0 pointer-events-none z-0 overflow-hidden">
             <div
-              className="absolute top-[18%] left-[18%] w-[36vw] h-[36vw] max-w-[440px] max-h-[440px] rounded-full blur-[110px] opacity-28 animate-aura-float"
-              style={{ background: `radial-gradient(circle, ${primary}, transparent 70%)` }}
-            />
-            <div
-              className="absolute bottom-[18%] right-[16%] w-[32vw] h-[32vw] max-w-[400px] max-h-[400px] rounded-full blur-[110px] opacity-24 animate-aura-float"
+              className="absolute bottom-[10%] right-[10%] w-[48vw] h-[48vw] max-w-[580px] max-h-[580px] rounded-full opacity-30 animate-aura-float will-change-transform"
               style={{
-                background: `radial-gradient(circle, ${secondary}, transparent 70%)`,
+                background: `radial-gradient(circle, ${secondary}60 0%, ${secondary}20 34%, ${secondary}07 58%, transparent 74%)`,
                 animationDelay: '-5.5s',
               }}
             />
           </div>
 
-          <div className="relative z-10 w-full max-w-4xl flex flex-col items-center text-center space-y-7">
-            <div className="min-h-[30px] text-xl sm:text-2xl font-grotesk font-medium text-white/22 blur-[0.8px] transition-all duration-300">
+          <div ref={domPulseRef} className="relative z-10 w-full max-w-4xl flex flex-col items-center text-center space-y-7 will-change-transform">
+            <div className="min-h-[30px] text-xl sm:text-2xl font-grotesk font-medium text-white/24 transition-opacity duration-300">
               {prevLine?.text || ''}
             </div>
 
@@ -439,7 +458,7 @@ export const LyricsStage: React.FC<LyricsStageProps> = ({
                 return (
                   <span
                     key={`${activeLineIdx}-${idx}`}
-                    className={`relative inline-flex items-center gap-1.5 font-display text-3xl sm:text-5xl md:text-6xl font-bold transition-all duration-200 ease-apple -mx-1.5 px-1.5 rounded-2xl ${
+                    className={`relative inline-flex items-center gap-1.5 font-display text-3xl sm:text-5xl md:text-6xl font-bold transition-colors duration-200 ease-apple -mx-1.5 px-1.5 rounded-2xl ${
                       isActive ? 'animate-aura-word-bloom' : ''
                     }`}
                     style={{
@@ -458,10 +477,10 @@ export const LyricsStage: React.FC<LyricsStageProps> = ({
             </div>
 
             <div className="space-y-3 pt-2">
-              <div className="text-xl sm:text-2xl font-grotesk font-medium text-white/26 blur-[0.6px] transition-all duration-300">
+              <div className="text-xl sm:text-2xl font-grotesk font-medium text-white/26 transition-opacity duration-300">
                 {nextLine?.text || ''}
               </div>
-              <div className="text-base sm:text-lg font-grotesk text-white/12 blur-[1.2px] transition-all duration-300">
+              <div className="text-base sm:text-lg font-grotesk text-white/14 transition-opacity duration-300">
                 {nextLine2?.text || ''}
               </div>
             </div>
@@ -471,7 +490,7 @@ export const LyricsStage: React.FC<LyricsStageProps> = ({
 
       {/* EDITORIAL POETIC SERIF + GOLDEN SPOTLIGHT & PROGRESS HAIRLINE */}
       {currentLine && style === 'editorial' && (
-        <div className="relative z-10 w-full max-w-4xl flex flex-col items-center text-center space-y-7">
+        <div ref={domPulseRef} className="relative z-10 w-full max-w-4xl flex flex-col items-center text-center space-y-7 will-change-transform">
           <div className="text-[10px] font-mono-code uppercase tracking-[0.28em] text-white/30">
             {song.title} · {song.artist}
           </div>
@@ -527,7 +546,7 @@ export const LyricsStage: React.FC<LyricsStageProps> = ({
 
       {/* CODESTYLE PRO CYBER IDE STREAM */}
       {currentLine && style === 'codestyle' && (
-        <div className="relative z-10 w-full max-w-3xl text-left font-mono-code rounded-2xl oled-surface p-5 sm:p-7 space-y-4">
+        <div ref={domPulseRef} className="relative z-10 w-full max-w-3xl text-left font-mono-code rounded-2xl oled-surface p-5 sm:p-7 space-y-4 will-change-transform">
           <div className="flex items-center justify-between border-b border-white/[0.08] pb-3 text-[11px]">
             <div className="flex items-center gap-2">
               <span className="w-2.5 h-2.5 rounded-full bg-rose-500/80" />
@@ -593,4 +612,4 @@ export const LyricsStage: React.FC<LyricsStageProps> = ({
       )}
     </div>
   );
-};
+});
