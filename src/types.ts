@@ -1,4 +1,7 @@
+export type SculptureForm = 'Knot' | 'Ribbon' | 'Bloom';
+
 export type LyricStyleId =
+  | 'sculpture'
   | 'apple_ui'
   | 'constellation'
   | 'fisheye'
@@ -42,7 +45,7 @@ export interface SongItem {
   fullDuration?: number;
   artworkUrl: string;
   audioUrl: string;
-  source: 'saavn' | 'audius' | 'itunes' | 'local' | 'live_tab' | 'live_mic';
+  source: 'demo' | 'saavn' | 'audius' | 'itunes' | 'local' | 'live_tab' | 'live_mic';
   isFullTrack: boolean;
   year?: string;
   playCount?: number;
@@ -106,6 +109,7 @@ export interface CompanionSyncMessage {
     source?: SongItem['source'];
   };
   blueprint: VibeBlueprint;
+  sculptureForm?: SculptureForm;
   currentTime: number;
   isPlaying: boolean;
   currentLineText: string;

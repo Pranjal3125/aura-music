@@ -4,9 +4,13 @@ import { AudioPulseState, LyricLine, SongItem, VibeBlueprint } from '../types';
 import { CanvasLyricMode, CosmosLyricsCanvas } from './CosmosLyricsCanvas';
 import { AppleUiLyricsStage } from './AppleUiLyricsStage';
 import { FisheyeLyricsStage } from './FisheyeLyricsStage';
+import { ShapePicker, SignalSculpture, type SculptureForm } from './SignalSculpture';
 import { getWordVisualIcon, type LyricPhase } from '../services/lyricSync';
 
 interface LyricsStageProps {
+  sculptureForm?: SculptureForm;
+  onFormChange?: (form: SculptureForm) => void;
+  controlsVisible?: boolean;
   song: SongItem;
   lyrics: LyricLine[];
   lyricsLoading: boolean;
@@ -38,6 +42,9 @@ function fmtCountdown(sec: number): string {
 }
 
 export const LyricsStage: React.FC<LyricsStageProps> = React.memo(({
+  sculptureForm = 'Knot',
+  onFormChange,
+  controlsVisible = true,
   song,
   lyrics,
   lyricsLoading,
@@ -105,6 +112,32 @@ export const LyricsStage: React.FC<LyricsStageProps> = React.memo(({
   const isCanvasWorld = CANVAS_WORLDS.includes(style);
   const isLiveStream = song.source === 'live_tab' || song.source === 'live_mic';
   const showLiveOnlyCard = isLiveStream && !hasLyrics;
+
+  if (style === 'sculpture') {
+    const line = currentLine || upcomingLine;
+    return (
+      <section className="sculpture-stage" aria-label="Signal sculpture">
+        <div className="stage-sculpture-art">
+          <div className="stage-orbit" aria-hidden="true" />
+          <SignalSculpture form={sculptureForm} palette={blueprint.palette} pulseRef={audioPulseRef} playing={isPlaying} />
+        </div>
+        <div className="sculpture-caption">
+          <span className="sculpture-credit"><i style={{ backgroundColor: primary }} />{line ? song.title : song.artist}</span>
+          {currentLine ? (
+            <p key={currentLine.start} className="sculpture-line">{currentLine.words.map((word, i) => (
+              <span key={i} style={{ color: i === activeWordIdx ? primary : undefined }} className={i > activeWordIdx ? 'unsung' : ''}>{word.text}{' '}</span>
+            ))}</p>
+          ) : <p className="sculpture-line">{upcomingLine?.text || song.title}</p>}
+          {line && !currentLine && secondsUntilNext > 0 && <small>Vocals in {fmtCountdown(secondsUntilNext)}</small>}
+          {!hasLyrics && !lyricsLoading && song.source !== 'demo' && onOpenLyricsSearch &&
+            <button onClick={onOpenLyricsSearch} className="sculpture-find"><Search size={13} /> Find lyrics</button>}
+        </div>
+        {onFormChange && <div className="stage-shapes" style={{ visibility: controlsVisible ? 'visible' : 'hidden' }}>
+          <ShapePicker form={sculptureForm} onChange={onFormChange} />
+        </div>}
+      </section>
+    );
+  }
 
   // Flagship Viral Reel Mode: Apple UI (iMessage + Apple Pay + Dynamic Island + Frosted Cards)
   if (hasLyrics && style === 'apple_ui') {
@@ -214,16 +247,10 @@ export const LyricsStage: React.FC<LyricsStageProps> = React.memo(({
               >
                 {song.artworkUrl ? (
                   <img src={song.artworkUrl} alt={song.title} className="w-full h-full object-cover" />
-                ) : isLiveStream ? (
-                  <div className="w-full h-full bg-zinc-950 flex flex-col items-center justify-center gap-2">
-                    <Radio className="w-14 h-14 animate-pulse" style={{ color: primary }} />
-                    <span className="text-[10px] font-mono-code tracking-widest uppercase text-white/55">
-                      LIVE DSP ACTIVE
-                    </span>
-                  </div>
                 ) : (
-                  <div className="w-full h-full bg-zinc-950 flex items-center justify-center">
-                    <Disc3 className="w-16 h-16 text-white/25" />
+                  <div className="relative h-full bg-[#101510]">
+                    <SignalSculpture form={sculptureForm} palette={blueprint.palette} pulseRef={audioPulseRef} playing={isPlaying} />
+                    {isLiveStream && <span className="live-source"><Radio size={12} />Live input</span>}
                   </div>
                 )}
               </div>
@@ -240,9 +267,9 @@ export const LyricsStage: React.FC<LyricsStageProps> = React.memo(({
                   ? 'Syncing celestial lyrics...'
                   : isLiveStream
                     ? 'Live Audio Edge Aura · Reacting in real time'
-                    : 'No synced lyrics matched automatically'}
+                    : song.source === 'demo' ? 'Original instrumental' : 'No synced lyrics matched automatically'}
               </div>
-              {!lyricsLoading && onOpenLyricsSearch && (
+              {!lyricsLoading && song.source !== 'demo' && onOpenLyricsSearch && (
                 <button
                   type="button"
                   onClick={onOpenLyricsSearch}

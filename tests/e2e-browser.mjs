@@ -19,6 +19,7 @@ const MIME_TYPES = {
   '.png': 'image/png',
   '.json': 'application/json',
   '.wav': 'audio/wav',
+  '.mp3': 'audio/mpeg',
 };
 
 function makeSilentWav(seconds = 4, sampleRate = 8000) {
@@ -432,6 +433,10 @@ try {
     mobile: true,
   });
   await delay(200);
+  if (CAPTURE_DIR) {
+    const shot = await client.send('Page.captureScreenshot', { format: 'png' });
+    writeFileSync(path.join(CAPTURE_DIR, 'home-mobile.png'), Buffer.from(shot.data, 'base64'));
+  }
   await client.evalExpr(`
     Array.from(document.querySelectorAll('button')).find(b => b.innerText.trim() === 'Studio')?.click();
   `);
@@ -477,6 +482,63 @@ try {
   assert.ok(/play instantly/i.test(homeText), `Home should show Play Instantly grid: ${homeText}`);
   assert.ok(homeText.includes('Husn') && homeText.includes('Anuv Jain'), 'Featured #8 should show authentic Husn by Anuv Jain');
   assert.ok(!/marshlemon|jain husn anuv/i.test(homeText), 'Featured grid must NOT contain Marshlemon knockoff');
+
+  // Compare actual rendered pixels with reduced motion enabled. Each shape should be
+  // distinct, and the same shape should stay still between frames.
+  await client.send('Emulation.setEmulatedMedia', {
+    features: [{ name: 'prefers-reduced-motion', value: 'reduce' }],
+  });
+  const shapes = await client.evalExpr(`
+    (async () => {
+      const probe = document.createElement('canvas');
+      probe.width = 64;
+      probe.height = 40;
+      const ctx = probe.getContext('2d');
+      const sample = () => {
+        ctx.clearRect(0, 0, 64, 40);
+        ctx.drawImage(document.querySelector('.hero-exhibit canvas'), 0, 0, 64, 40);
+        return probe.toDataURL();
+      };
+      const nextFrame = () => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      const results = [];
+      for (const button of document.querySelectorAll('.form-switch button')) {
+        button.click();
+        await nextFrame();
+        const pixels = sample();
+        await new Promise(resolve => setTimeout(resolve, 100));
+        results.push({ selected: button.getAttribute('aria-pressed'), pixels, still: pixels === sample() });
+      }
+      return results;
+    })()
+  `);
+  assert.equal(new Set(shapes.map(s => s.pixels)).size, 3, 'All three sculptures must render distinct pixels');
+  assert.ok(shapes.every(s => s.still && s.selected === 'true'), 'Reduced-motion preview must stay still');
+  await client.send('Emulation.setEmulatedMedia', { features: [] });
+
+  const requestsBeforeDemo = requestedUrls.length;
+  await client.evalExpr(`document.querySelector('.launch-demo').click()`);
+  let demoSnapshot;
+  for (let i = 0; i < 35; i++) {
+    demoSnapshot = await client.evalExpr(`JSON.parse(localStorage.getItem('aura_companion_snapshot_v1') || 'null')`);
+    if (demoSnapshot?.song.source === 'demo' && demoSnapshot.isPlaying && demoSnapshot.currentTime > 0.15) break;
+    await delay(150);
+  }
+  assert.equal(demoSnapshot?.song.title, 'Phase Shift');
+  assert.ok(demoSnapshot.isPlaying && demoSnapshot.currentTime > 0.15, 'Local demo audio clock must advance');
+  assert.ok(demoSnapshot.song.duration > 16 && demoSnapshot.song.duration < 18, 'Demo duration must come from playable audio');
+  assert.equal(demoSnapshot.sculptureForm, 'Bloom', 'Selected preview shape must reach the player and companion');
+  assert.equal(demoSnapshot.blueprint.lyricStyle, 'sculpture');
+  assert.equal(await client.evalExpr(`document.querySelector('.stage-sculpture-art canvas').dataset.auraSculpture`), 'Bloom');
+  assert.deepEqual(requestedUrls.slice(requestsBeforeDemo).filter(u => /lrclib|lyrics\.ovh|saavn|itunes\.apple/i.test(u)), [], 'Demo playback should be self-contained');
+  await client.evalExpr(`document.querySelector('.stage-shapes button').click()`);
+  await delay(180);
+  assert.equal(await client.evalExpr(`document.querySelector('.stage-sculpture-art canvas').dataset.auraSculpture`), 'Knot');
+  if (CAPTURE_DIR) {
+    const shot = await client.send('Page.captureScreenshot', { format: 'png' });
+    writeFileSync(path.join(CAPTURE_DIR, 'sculpture-stage.png'), Buffer.from(shot.data, 'base64'));
+  }
+  await client.evalExpr(`document.querySelector('button[title="Back to Home"]').click()`);
+  await delay(150);
 
   // 1b. Verify Studio sits ABOVE closed SearchBar & dimmed Featured cards, while open SearchBar dropdown sits ABOVE StudioPopover!
   await client.evalExpr(`

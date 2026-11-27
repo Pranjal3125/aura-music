@@ -33,6 +33,7 @@ export interface AuraUserSettings {
 
 const VALID_LYRIC_STYLES: readonly LyricStyleId[] = [
   'apple_ui',
+  'sculpture',
   'constellation',
   'fisheye',
   'branches',

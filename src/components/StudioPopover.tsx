@@ -25,6 +25,7 @@ import type { EqBands } from '../services/settingsStorage';
 
 export const LYRIC_STYLES: Array<{ id: LyricStyleId; label: string }> = [
   { id: 'apple_ui', label: 'Apple UI' },
+  { id: 'sculpture', label: 'Sculpture' },
   { id: 'constellation', label: 'Constellation' },
   { id: 'fisheye', label: 'Fisheye' },
   { id: 'branches', label: 'Branches' },
@@ -140,12 +141,9 @@ export const StudioPopover: React.FC<StudioPopoverProps> = React.memo(({
 
   return (
     <div
-      className={`fixed top-20 ${
+      className={`studio-drawer fixed top-20 ${
         hasActiveSong ? 'bottom-36' : 'bottom-6'
       } right-5 z-50 w-[min(92vw,404px)] oled-surface rounded-3xl flex flex-col overflow-hidden animate-panel-in`}
-      style={{
-        background: 'linear-gradient(180deg, rgba(13, 13, 20, 0.985) 0%, rgba(6, 6, 10, 0.995) 100%)',
-      }}
     >
       {/* Studio Header + Segmented Tabs */}
       <div className="p-4 pb-3 border-b border-white/[0.07] space-y-3 shrink-0">
@@ -173,6 +171,7 @@ export const StudioPopover: React.FC<StudioPopoverProps> = React.memo(({
             <button
               type="button"
               onClick={onClose}
+              aria-label="Close Studio"
               className="p-1.5 rounded-lg bg-white/[0.06] hover:bg-white/[0.12] text-white/60 cursor-pointer"
             >
               <X className="w-3.5 h-3.5" />

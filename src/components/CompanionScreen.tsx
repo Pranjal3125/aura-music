@@ -10,6 +10,7 @@ import type {
 } from '../types';
 import { ClickPulseOverlay } from './ClickPulseOverlay';
 import { LumnEdgeCanvas } from './LumnEdgeCanvas';
+import { SignalSculpture } from './SignalSculpture';
 
 export const COMPANION_SNAPSHOT_KEY = 'aura_companion_snapshot_v1';
 
@@ -30,6 +31,8 @@ function discreteKey(d: CompanionSyncMessage): string {
     d.currentLineText,
     d.nextLineText || '',
     d.blueprint.moodName,
+    d.blueprint.lyricStyle,
+    d.sculptureForm,
     d.blueprint.edgeStyle,
     d.blueprint.palette.primary,
     d.blueprint.palette.secondary,
@@ -260,7 +263,7 @@ export const CompanionScreen: React.FC = () => {
           <MonitorSmartphone className="w-9 h-9 mx-auto text-purple-400" />
           <h1 className="text-xl font-semibold text-white">AURA Companion Display</h1>
           <p className="text-xs text-white/55 leading-relaxed">
-            Move this window onto your laptop / second monitor — it mirrors the Reel&apos;s pure-OLED floating album cover + synced Lumn liquid edge light automatically.
+            Play a track in the main window. Its artwork, lyrics and lights will appear here.
           </p>
         </div>
       </div>
@@ -311,7 +314,9 @@ export const CompanionScreen: React.FC = () => {
               transform: isPlaying ? 'translate3d(0,0,0) scale(1)' : 'translate3d(0,0,0) scale(0.96)',
             }}
           >
-            {song.artworkUrl ? (
+            {blueprint.lyricStyle === 'sculpture' ? (
+              <SignalSculpture form={sync.sculptureForm ?? 'Knot'} palette={blueprint.palette} pulseRef={audioPulseRef} playing={isPlaying} />
+            ) : song.artworkUrl ? (
               <img src={song.artworkUrl} alt={song.title} className="w-full h-full object-cover" />
             ) : (
               <div className="w-full h-full bg-zinc-950 flex items-center justify-center">

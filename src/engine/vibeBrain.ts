@@ -98,6 +98,7 @@ export function directSongAutonomously(params: {
     else if (/\b(white|silver|mono|leica|black)\b/.test(low)) palette = { primary: '#f8fafc', secondary: '#94a3b8', accent: '#ffffff' };
 
     if (/\b(apple|imessage|ios|macos|pay|bubble|card|verci|reel)\b/.test(low)) { lyricStyle = 'apple_ui'; }
+    else if (/\b(sculpture|knot|ribbon|bloom)\b/.test(low)) { lyricStyle = 'sculpture'; }
     else if (/\b(fisheye|lens|bulge)\b/.test(low)) { lyricStyle = 'fisheye'; }
     else if (/\b(constellation|star|stars)\b/.test(low)) { lyricStyle = 'constellation'; particles = 'cosmos'; }
     else if (/\b(branch|branches|neural|lightning|tree)\b/.test(low)) { lyricStyle = 'branches'; }
@@ -146,7 +147,7 @@ const GEMINI_SCHEMA = {
     lyricStyle: {
       type: 'string',
       enum: [
-        'apple_ui',
+        'apple_ui', 'sculpture',
         'constellation',
         'fisheye',
         'branches',
@@ -195,7 +196,7 @@ export async function directSongWithGemini(params: {
   const lyricsSample = lyrics.slice(0, 12).map((l) => l.text).join('\n');
 
   const prompt = `You are AURA, an ultra-luxury dark-room music aesthetic director (Verci + Lumn on pitch-black OLED).
-Pick the exact vibrant neon palette, lyric visual world (apple_ui | constellation | fisheye | branches | web | tunnel | mirror | glitch | kinetic | liquid | editorial | codestyle), edge lighting style, atmosphere, and whether bottom spectrum bars fit this track:
+Pick the exact vibrant neon palette, lyric visual world (apple_ui | sculpture | constellation | fisheye | branches | web | tunnel | mirror | glitch | kinetic | liquid | editorial | codestyle), edge lighting style, atmosphere, and whether bottom spectrum bars fit this track:
 
 Song: "${song.title}" by "${song.artist}" (Album: "${song.album}")
 ${userPrompt ? `User creative prompt: "${userPrompt}"` : ''}
@@ -241,7 +242,7 @@ ${lyricsSample ? `Lyrics:\n${lyricsSample}` : ''}`;
   const fallback = VIBE_PRESETS[0];
   const isHex = (c: unknown): c is string => typeof c === 'string' && /^#[0-9a-fA-F]{6}$/.test(c);
   const validLyricStyles = new Set<LyricStyleId>([
-    'apple_ui', 'constellation', 'fisheye', 'branches', 'web', 'tunnel', 'mirror', 'glitch', 'kinetic', 'liquid', 'editorial', 'codestyle',
+    'apple_ui', 'sculpture', 'constellation', 'fisheye', 'branches', 'web', 'tunnel', 'mirror', 'glitch', 'kinetic', 'liquid', 'editorial', 'codestyle',
   ]);
   const validEdgeStyles = new Set<EdgeStyleId>([
     'lumn_vivid', 'laser_orbit', 'violet_prism', 'breathing_aura', 'off',

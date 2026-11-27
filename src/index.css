@@ -43,6 +43,37 @@
   letter-spacing: -0.022em;
 }
 
+.search-key { display: grid; place-items: center; width: 20px; height: 20px; border: 1px solid #424943; border-radius: 4px; color: #a4aaa5; font: 11px monospace; }
+.oled-pill:has(input[type=text]:focus-visible), label:has(input[type=file]:focus-visible) { outline: 2px solid var(--aura-accent); outline-offset: 2px; }
+button:focus-visible, input[type=range]:focus-visible { outline: 2px solid #ebf1e7; outline-offset: 2px; }
+.sculpture-stage { position: relative; width: 100%; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 62px 20px 135px; z-index: 10; text-align: center; }
+.stage-sculpture-art { position: relative; width: min(740px, 94vw); height: clamp(120px, 41vh, 430px); flex-shrink: 1; }
+.stage-orbit { position: absolute; inset: 11% 12%; border-radius: 50%; border: 1px dashed color-mix(in srgb, var(--aura-primary) 22%, transparent); transform: rotate(-14deg); }
+.sculpture-caption { position: relative; max-width: min(780px, 92vw); }
+.sculpture-credit, .live-source { display: inline-flex; align-items: center; justify-content: center; gap: 8px; text-transform: uppercase; font: 10px/1.3 'JetBrains Mono', monospace; letter-spacing: .16em; color: #bdc2b9; }
+.sculpture-credit i { flex: none; height: 5px; width: 5px; border-radius: 50%; }
+.sculpture-line { margin: 5px 0 0; font: 600 clamp(28px, 4.4vw, 66px)/1.05 'Space Grotesk', Arial, sans-serif; letter-spacing: -.055em; text-wrap: balance; overflow-wrap: anywhere; }
+.sculpture-line .unsung { color: #969b97; }
+.sculpture-caption small { font: 11px 'JetBrains Mono', monospace; color: #a2aaa1; }
+.sculpture-find { display: inline-flex; align-items: center; gap: 6px; margin-top: 8px; padding: 5px 10px; color: #bfc6bc; font-size: 12px; cursor: pointer; }
+.live-source { position: absolute; bottom: 9px; left: 10px; font-size: 9px; }
+.world-picker { display: flex; gap: 4px; width: max-content; max-width: 100%; overflow-x: auto; margin: 0 auto 6px; padding: 4px; border: 1px solid #ffffff21; border-radius: 12px; background: #101311f5; }
+.world-picker button { border: 0; border-radius: 7px; font-size: 11px; padding: 5px 8px; box-shadow: none !important; }
+.world-picker button:not([aria-pressed=true]) { background: transparent; color: #bcc3bc; }
+.world-picker button:hover:not([aria-pressed=true]) { background: #272d28; color: white; }
+.transport-panel.oled-surface { border-color: #ffffff27; background: linear-gradient(155deg,#1b201df7,#0e110ffb 68%); box-shadow: 0 10px 35px #0009; }
+.world-picker button:focus-visible, .transport-panel button:focus-visible { outline-offset: -2px; }
+.seek-control { position: absolute; inset: 50% 0 auto; width: 100%; height: 20px; transform: translateY(-50%); opacity: 0; cursor: pointer; }
+[data-aura-seekbar]:has(.seek-control:focus-visible) { outline: 2px solid #fff; outline-offset: 3px; }
+.studio-drawer.oled-surface, .timeline-drawer.oled-surface { border-color: #414640; background: #111512; box-shadow: 0 12px 46px #000a; }
+.studio-drawer > :first-child,.timeline-drawer > :first-child { background: linear-gradient(110deg,#20271e,#141915); }
+@media (max-width: 600px) {
+  .stage-transport { bottom: max(10px, env(safe-area-inset-bottom)); }
+  .sculpture-stage { padding-bottom: 128px; }
+  .sculpture-line { max-height: 24vh; overflow: auto; }
+  .studio-drawer.oled-surface, .timeline-drawer.oled-surface { right: 10px; left: auto; width: calc(100% - 20px); }
+}
+
 /* =====================================================================
    ZERO-REPAINT ZERO-BLUR 120FPS LUMN-GRADE OLED PERIMETER EDGE LIGHTING
    Liquid perimeter waves are rendered on GPU WebGL2 (LumnEdgeCanvas);

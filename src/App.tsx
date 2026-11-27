@@ -17,13 +17,10 @@ import {
   ListMusic,
   Sliders,
   Video,
-  MonitorPlay,
-  Mic,
   Minus,
   Plus,
   Infinity as InfinityIcon,
   Repeat1,
-  Radio,
   Shuffle,
   Crosshair,
 } from 'lucide-react';
@@ -63,6 +60,8 @@ import { loadUserSettings, saveUserSettings, type EqBands } from './services/set
 import { computeLyricCursor, type LyricPhase } from './services/lyricSync';
 import { LightAudioEngine } from './engine/lightAudioEngine';
 import { directSongAutonomously, directSongWithGemini, presetToBlueprint } from './engine/vibeBrain';
+import { ListeningRoom } from './components/ListeningRoom';
+import { SIGNAL_PALETTE, type SculptureForm } from './components/SignalSculpture';
 import { SearchBar } from './components/SearchBar';
 import { LyricsStage } from './components/LyricsStage';
 import { AmbientParticles } from './components/AmbientParticles';
@@ -125,23 +124,15 @@ function buildInitialBlueprint(prefs: ReturnType<typeof loadUserSettings>): Vibe
   };
 }
 
-const QUICK_SEARCH_CHIPS = [
-  { label: 'No Lie · Sean Paul', q: 'No Lie Sean Paul Dua Lipa' },
-  { label: 'Starboy · The Weeknd', q: 'Starboy The Weeknd' },
-  { label: 'Kesariya', q: 'Kesariya Arijit Singh' },
-  { label: 'Tum Hi Ho', q: 'Tum Hi Ho Arijit Singh' },
-  { label: 'Apna Bana Le', q: 'Apna Bana Le Arijit Singh' },
-  { label: 'Blinding Lights', q: 'Blinding Lights The Weeknd' },
-];
-
-const RADIO_STATIONS = [
-  { label: 'Violet Pop & Dance ∞', q: 'Sean Paul Dua Lipa The Weeknd', accent: '#a855f7' },
-  { label: 'Trending Hindi ∞', q: 'Arijit Singh Pritam Hindi', accent: '#ff1e42' },
-  { label: 'Bollywood Soul ∞', q: 'Arijit Singh Atif Aslam Bollywood', accent: '#f59e0b' },
-  { label: 'Indie Chill ∞', q: 'Anuv Jain Indie India', accent: '#38bdf8' },
-  { label: 'Punjabi Hits ∞', q: 'Diljit Dosanjh AP Dhillon Punjabi', accent: '#10b981' },
-  { label: 'Electronic / Audius ∞', q: 'Electronic Synthwave', accent: '#0a84ff' },
-];
+const DEMO_TRACK: SongItem = {
+  id: 'aura-phase-shift', title: 'Phase Shift', artist: 'AURA', album: 'AURA Originals',
+  source: 'demo', audioUrl: './phase-shift.mp3', artworkUrl: '', isFullTrack: true, duration: 32 * 60 / 112,
+};
+const DEMO_LOOK: VibeBlueprint = {
+  moodName: 'Signal Sculpture', archetype: 'Electronic', directorNote: 'The sculpture follows the frequency spectrum.',
+  source: 'preset', palette: SIGNAL_PALETTE, lyricStyle: 'sculpture', edgeStyle: 'breathing_aura',
+  particles: 'none', showSpectrum: false,
+};
 
 export function App() {
   const isCompanion = useMemo(
@@ -201,7 +192,15 @@ const AuraStage: React.FC = () => {
   const [lyricOffset, setLyricOffset] = useState(0);
   const [isSyncLocked, setIsSyncLocked] = useState(false);
 
-  const [blueprint, setBlueprint] = useState<VibeBlueprint>(() => buildInitialBlueprint(initialPrefs));
+  const [musicBlueprint, setMusicBlueprint] = useState<VibeBlueprint>(() => buildInitialBlueprint(initialPrefs));
+  const [demoBlueprint, setDemoBlueprint] = useState(DEMO_LOOK);
+  const [sculptureForm, setSculptureForm] = useState<SculptureForm>('Knot');
+  const [sculpturePalette, setSculpturePalette] = useState(() =>
+    VIBE_PRESETS.find(p => p.id === initialPrefs.presetId)?.palette ?? SIGNAL_PALETTE
+  );
+  const demoActive = activeSong?.source === 'demo';
+  const blueprint = demoActive ? demoBlueprint : musicBlueprint;
+  const setBlueprint = demoActive ? setDemoBlueprint : setMusicBlueprint;
   const [activePresetId, setActivePresetId] = useState<string>(() => initialPrefs.presetId ?? 'verci-lumn');
   const [visualIcons, setVisualIcons] = useState<boolean>(() => initialPrefs.visualIcons ?? true);
   const [lockPreset, setLockPreset] = useState<boolean>(() => initialPrefs.lockPreset ?? false);
@@ -232,6 +231,7 @@ const AuraStage: React.FC = () => {
   const edgeBeatRef = useRef<HTMLDivElement | null>(null);
   const edgeBloomRef = useRef<HTMLDivElement | null>(null);
   const seekFillRef = useRef<HTMLDivElement | null>(null);
+  const seekInputRef = useRef<HTMLInputElement | null>(null);
   const timeLabelRef = useRef<HTMLSpanElement | null>(null);
   const lastWakeMsRef = useRef(0);
   const chromeVisibleRef = useRef(true);
@@ -264,6 +264,7 @@ const AuraStage: React.FC = () => {
     lyricPhase,
     lyricOffset,
     activeSong,
+    sculptureForm,
     blueprint,
     isPlaying,
     queue,
@@ -280,6 +281,7 @@ const AuraStage: React.FC = () => {
     lyricPhase,
     lyricOffset,
     activeSong,
+    sculptureForm,
     blueprint,
     isPlaying,
     queue,
@@ -349,10 +351,11 @@ const AuraStage: React.FC = () => {
   const updateVisualSetting = useCallback(
     (patch: Partial<Pick<VibeBlueprint, 'lyricStyle' | 'edgeStyle' | 'particles' | 'showSpectrum'>>) => {
       sessionVisualPrefsRef.current = { ...sessionVisualPrefsRef.current, ...patch };
-      setBlueprint((b) => ({ ...b, ...patch }));
+      setMusicBlueprint((b) => ({ ...b, ...patch }));
+      if (demoActive) setDemoBlueprint((b) => ({ ...b, ...patch }));
       saveUserSettings(patch);
     },
-    []
+    [demoActive]
   );
 
   const applyPreset = useCallback(
@@ -366,7 +369,9 @@ const AuraStage: React.FC = () => {
         showSpectrum: preset.showSpectrum,
       };
       setActivePresetId(preset.id);
-      setBlueprint(presetToBlueprint(preset));
+      setSculpturePalette(preset.palette);
+      setMusicBlueprint(presetToBlueprint(preset));
+      if (demoActive) setDemoBlueprint(presetToBlueprint(preset));
       saveUserSettings({
         presetId: preset.id,
         lyricStyle: preset.lyricStyle,
@@ -376,7 +381,7 @@ const AuraStage: React.FC = () => {
       });
       showToast(`Preset: ${preset.name}`);
     },
-    [showToast]
+    [showToast, demoActive]
   );
 
   const replenishRadio = useCallback(
@@ -447,6 +452,18 @@ const AuraStage: React.FC = () => {
       setLyricsLoading(true);
       setLyricOffset(0);
       setIsSyncLocked(false);
+
+      if (song.source === 'demo') {
+        setDemoBlueprint({ ...DEMO_LOOK, palette: sculpturePalette });
+        setLyricsLoading(false);
+        audioRef.current?.setTrackBpm(112);
+        try {
+          await audioRef.current?.loadAndPlay(song.audioUrl);
+        } catch {
+          if (activeSongIdRef.current === song.id) showToast('Press Play to start the demo.');
+        }
+        return;
+      }
 
       // Launch lyrics, artwork extraction, and optional full-track 320kbps upgrade independently!
       const palettePromise = extractPaletteFromArtwork(song.artworkUrl);
@@ -608,7 +625,7 @@ const AuraStage: React.FC = () => {
           lyrics: fetchedLyrics,
           artworkPalette,
         });
-        setBlueprint(applyLatestVisualPrefs(autoBp));
+        setMusicBlueprint(applyLatestVisualPrefs(autoBp));
 
         const key = geminiKey.trim();
         if (key) {
@@ -620,7 +637,7 @@ const AuraStage: React.FC = () => {
               lyrics: fetchedLyrics,
             });
             if (activeSongIdRef.current === song.id && !loadUserSettings().lockPreset) {
-              setBlueprint(applyLatestVisualPrefs(gemBp));
+              setMusicBlueprint(applyLatestVisualPrefs(gemBp));
             }
           } catch {
             // keep seamless auto AI
@@ -630,7 +647,7 @@ const AuraStage: React.FC = () => {
         }
       }
     },
-    [queue, geminiKey, showToast, replenishRadio]
+    [queue, geminiKey, showToast, replenishRadio, sculpturePalette]
   );
 
   const handleManualSearchLyrics = useCallback(
@@ -702,7 +719,7 @@ const AuraStage: React.FC = () => {
         }
       }
 
-      if (dir === 1 && idx === list.length - 1 && infiniteRadio) {
+      if (dir === 1 && idx === list.length - 1 && infiniteRadio && activeSong.source !== 'demo') {
         const fresh = await replenishRadio(activeSong, list);
         if (fresh.length > 0) {
           const seenKeys = new Set(list.map((x) => makeSongKey(x.title, x.artist)));
@@ -810,7 +827,7 @@ const AuraStage: React.FC = () => {
         setLyrics([]);
         setLyricsLoading(false);
         setIsPlaying(true);
-        setBlueprint((b) => ({ ...b, showSpectrum: true }));
+        setMusicBlueprint((b) => ({ ...b, showSpectrum: true }));
         showToast(kind === 'tab' ? 'Live Tab Audio connected!' : 'Room Mic active!');
       } catch (err) {
         showToast(err instanceof Error ? err.message : 'Capture cancelled.');
@@ -838,7 +855,7 @@ const AuraStage: React.FC = () => {
         engine.play();
         return;
       }
-      if (st.infiniteRadio || st.queue.length > 1) {
+      if ((st.infiniteRadio && st.activeSong.source !== 'demo') || st.queue.length > 1) {
         void playAdjacentRef.current(1);
       }
     };
@@ -910,6 +927,7 @@ const AuraStage: React.FC = () => {
       prevNow = now;
 
       const s = rafStateRef.current;
+      if (!s.activeSong) return;
       const rawPulse = engine.samplePulse(dt);
 
       const atk = 1 - Math.exp(-22 * dt);
@@ -1019,6 +1037,10 @@ const AuraStage: React.FC = () => {
         if (formatted !== lastTimeStr) {
           lastTimeStr = formatted;
           timeLabelRef.current.textContent = formatted;
+          if (seekInputRef.current) {
+            seekInputRef.current.value = String(curSec);
+            seekInputRef.current.setAttribute('aria-valuetext', formatted);
+          }
         }
       }
 
@@ -1081,7 +1103,7 @@ const AuraStage: React.FC = () => {
           curLineIdx >= 0 && curLineIdx + 1 < s.lyrics.length
             ? s.lyrics[curLineIdx + 1]?.text
             : undefined;
-        const discreteKey = `${s.activeSong.id}|${Math.round(durSec)}|${s.activeSong.artworkUrl}|${playingNow ? 1 : 0}|${curText}|${nextText || ''}|${s.blueprint.moodName}|${s.blueprint.edgeStyle}|${s.blueprint.palette.primary}|${s.blueprint.palette.secondary}|${s.blueprint.palette.accent}`;
+        const discreteKey = `${s.activeSong.id}|${Math.round(durSec)}|${s.activeSong.artworkUrl}|${playingNow ? 1 : 0}|${curText}|${nextText || ''}|${s.blueprint.moodName}|${s.blueprint.lyricStyle}|${s.sculptureForm}|${s.blueprint.edgeStyle}|${s.blueprint.palette.primary}|${s.blueprint.palette.secondary}|${s.blueprint.palette.accent}`;
         const discreteChanged = discreteKey !== lastDiscreteSyncKey;
         const companionActive = now - companionLastSeenRef.current < 8500;
         const shouldBroadcast = discreteChanged || (companionActive && now - lastCompanionMs > 55);
@@ -1101,6 +1123,7 @@ const AuraStage: React.FC = () => {
               source: s.activeSong.source,
             },
             blueprint: s.blueprint,
+            sculptureForm: s.sculptureForm,
             currentTime: curSec,
             isPlaying: playingNow,
             currentLineText: curText,
@@ -1178,6 +1201,12 @@ const AuraStage: React.FC = () => {
       ctx.fillStyle = rad;
       ctx.fillRect(0, 0, w, h);
 
+      const sculpture = document.querySelector<HTMLCanvasElement>('canvas[data-aura-sculpture]');
+      if (sculpture && sculpture.width && sculpture.height) {
+        const bounds = sculpture.getBoundingClientRect();
+        const sx = w / window.innerWidth, sy = h / window.innerHeight;
+        ctx.drawImage(sculpture, bounds.left * sx, bounds.top * sy, bounds.width * sx, bounds.height * sy);
+      }
       const stageCanvas = document.querySelector('canvas[data-aura-stage-canvas="true"]') as HTMLCanvasElement | null;
       if (stageCanvas) {
         ctx.drawImage(stageCanvas, 0, 0, w, h);
@@ -1192,7 +1221,7 @@ const AuraStage: React.FC = () => {
 
         ctx.font = '600 14px "JetBrains Mono", monospace';
         ctx.fillStyle = 'rgba(255,255,255,0.55)';
-        ctx.fillText(`${snap.activeSong.title} · ${snap.activeSong.artist}`, w * 0.5, h * 0.24);
+        ctx.fillText(`${snap.activeSong.title} · ${snap.activeSong.artist}`, w * 0.5, h * (sculpture ? 0.76 : 0.24));
 
         if (line) {
           const text = line.text;
@@ -1201,11 +1230,11 @@ const AuraStage: React.FC = () => {
           ctx.shadowColor = p;
           ctx.shadowBlur = 24 + bass * 20;
           ctx.fillStyle = '#ffffff';
-          ctx.fillText(text, w * 0.5, h * 0.5, w * 0.84);
+          ctx.fillText(text, w * 0.5, h * (sculpture ? 0.84 : 0.5), w * 0.84);
         } else if (nextL) {
           ctx.font = '600 28px "Space Grotesk", sans-serif';
           ctx.fillStyle = 'rgba(255,255,255,0.75)';
-          ctx.fillText(nextL.text, w * 0.5, h * 0.5, w * 0.84);
+          ctx.fillText(nextL.text, w * 0.5, h * (sculpture ? 0.84 : 0.5), w * 0.84);
         }
         ctx.restore();
       }
@@ -1517,6 +1546,7 @@ const AuraStage: React.FC = () => {
     const onKey = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement | null)?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+      if (e.code === 'Space' && tag === 'BUTTON') return;
       if (e.code === 'Space' && activeSong) {
         e.preventDefault();
         audioRef.current?.togglePlay();
@@ -1536,8 +1566,10 @@ const AuraStage: React.FC = () => {
         const delta = e.shiftKey ? 5 : 0.5;
         const next = Math.round((rafStateRef.current.lyricOffset + delta) * 20) / 20;
         applySyncedOffset(next, `Sync: ${next >= 0 ? `+${next.toFixed(1)}s` : `${next.toFixed(1)}s`}`, true);
-      } else if (e.key === 'Escape' && pureCinema) {
+      } else if (e.key === 'Escape') {
         setPureCinema(false);
+        setVibePanelOpen(false);
+        setLyricsDrawerOpen(false);
       }
     };
     window.addEventListener('keydown', onKey);
@@ -1563,6 +1595,8 @@ const AuraStage: React.FC = () => {
       ref={rootRef}
       className="relative w-full h-full bg-black text-white overflow-hidden"
       onMouseMove={wakeChrome}
+      onTouchStart={wakeChrome}
+      onFocusCapture={wakeChrome}
       onClick={() => {
         if (pureCinema) setPureCinema(false);
       }}
@@ -1582,7 +1616,7 @@ const AuraStage: React.FC = () => {
     >
       {/* Pure OLED Center Ambient Wash + Global 120fps Click Pulse */}
       <div className="aura-oled-backdrop" />
-      <ClickPulseOverlay />
+      {activeSong && <ClickPulseOverlay />}
 
       {focusRemaining !== null && (
         <div className="fixed top-0 left-0 right-0 h-[2px] z-40 bg-white/10">
@@ -1593,7 +1627,7 @@ const AuraStage: React.FC = () => {
         </div>
       )}
 
-      {!usesCanvasWorld && (
+      {activeSong && !usesCanvasWorld && (
         <AmbientParticles
           mode={blueprint.particles === 'cosmos' ? 'stars' : blueprint.particles}
           color={blueprint.palette.primary}
@@ -1602,7 +1636,7 @@ const AuraStage: React.FC = () => {
       )}
 
       {/* 120fps GPU WebGL2 Lumn Liquid Perimeter Lighting (zero blur, zero CSS box-shadow) */}
-      {blueprint.edgeStyle !== 'off' && (
+      {activeSong && blueprint.edgeStyle !== 'off' && (
         <div
           className="aura-edge-frame"
           style={{ opacity: blueprint.edgeStyle === 'breathing_aura' ? 0.72 : 1 }}
@@ -1646,261 +1680,33 @@ const AuraStage: React.FC = () => {
         </div>
       )}
 
-      {/* ====================================================================
-          HOME SCREEN — REDESIGNED VERCI × LUMN LUXURY OLED SHOWCASE
-          ==================================================================== */}
       {!activeSong && (
-        <div className="relative w-full h-full overflow-y-auto">
-          <div className="min-h-full w-full flex flex-col items-center px-5 py-4 sm:py-5">
-            {/* Minimal Floating Header pinned cleanly above StudioPopover */}
-            <div className="sticky top-0 z-[60] w-[min(94vw,920px)] flex items-center justify-between gap-2 pb-3 shrink-0">
-              <div className="oled-pill px-2.5 sm:px-3.5 py-1.5 rounded-full text-[10px] font-mono-code tracking-[0.12em] sm:tracking-[0.2em] uppercase text-white/75 flex items-center gap-2 shrink-0 whitespace-nowrap">
-                <span
-                  className="w-2 h-2 rounded-full animate-pulse"
-                  style={{ backgroundColor: primary, boxShadow: `0 0 10px ${primary}` }}
-                />
-                <span>
-                  Verci × Lumn<span className="hidden sm:inline"> · OLED</span>
-                </span>
-              </div>
-
-              <div className="flex items-center gap-1.5 flex-nowrap justify-end shrink-0">
-                <button
-                  type="button"
-                  onClick={() => void handleStartLiveAudio('tab')}
-                  className="oled-pill px-2.5 sm:px-3 py-1.5 rounded-full text-[11px] text-white/70 hover:text-emerald-400 flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
-                >
-                  <MonitorPlay className="w-3.5 h-3.5 shrink-0" />
-                  <span className="hidden md:inline">YT / Spotify Tab</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void handleStartLiveAudio('mic')}
-                  className="oled-pill px-2.5 sm:px-3 py-1.5 rounded-full text-[11px] text-white/70 hover:text-sky-400 flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
-                >
-                  <Mic className="w-3.5 h-3.5 shrink-0" />
-                  <span className="hidden md:inline">Mic</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={openCompanion}
-                  className="oled-pill px-2.5 sm:px-3 py-1.5 rounded-full text-[11px] text-white/70 hover:text-white flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
-                >
-                  <MonitorSmartphone className="w-3.5 h-3.5 shrink-0" />
-                  <span className="hidden md:inline">2nd Screen</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setVibePanelOpen((v) => !v)}
-                  className="oled-pill px-3 py-1.5 rounded-full text-[11px] text-white/85 hover:text-white flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
-                  style={vibePanelOpen ? { borderColor: primary } : undefined}
-                >
-                  <Sliders className="w-3.5 h-3.5 shrink-0" style={{ color: primary }} />
-                  <span>Studio</span>
-                </button>
-              </div>
-            </div>
-
-            <div className="my-auto w-full flex flex-col items-center">
-              {/* Hero Wordmark & Tagline */}
-              <div className="relative z-10 flex flex-col items-center text-center mb-4">
-                <div className="relative flex items-center justify-center">
-                  <div
-                    aria-hidden
-                    className="absolute w-72 h-28 rounded-full opacity-45 pointer-events-none"
-                    style={{
-                      background: `radial-gradient(ellipse at center, ${primary}66 0%, ${blueprint.palette.secondary}24 42%, transparent 74%)`,
-                    }}
-                  />
-                  <h1 className="relative font-display text-4xl sm:text-5xl font-extrabold tracking-[0.26em] bg-gradient-to-b from-white via-white to-white/60 bg-clip-text text-transparent">
-                    AURA
-                  </h1>
-                </div>
-                <p className="text-xs sm:text-sm text-white/55 max-w-lg mt-1.5 leading-relaxed">
-                  Animated Apple UI &amp; constellation lyrics, dual-screen dark player, and music-synced Lumn perimeter glow.
-                </p>
-              </div>
-
-              {/* Elevated SearchBar + Quick Try Chips */}
-              <SearchBar
-                accentColor={primary}
-                externalQuery={externalSearchQuery}
-                onSelectSong={handleSelectSearchSong}
-                onAddToQueue={handleAddSearchSongToQueue}
-                onUploadLocalFile={handleLocalFile}
-                onDropdownToggle={setSearchOpen}
-              />
-
-              <div className="relative z-10 flex items-center justify-center gap-1.5 mt-2.5 flex-wrap max-w-[680px]">
-                <span className="text-[10px] font-mono-code uppercase tracking-wider text-white/35 mr-1">
-                  Try:
-                </span>
-                {QUICK_SEARCH_CHIPS.map((chip) => (
-                  <button
-                    key={chip.label}
-                    type="button"
-                    onClick={() =>
-                      setExternalSearchQuery({ query: chip.q, nonce: ++searchChipNonceRef.current })
-                    }
-                    className="px-2.5 py-1 rounded-full bg-white/[0.04] hover:bg-white/[0.1] border border-white/[0.07] text-[11px] text-white/60 hover:text-white cursor-pointer"
-                  >
-                    {chip.label}
-                  </button>
-                ))}
-              </div>
-
-              {/* Lower Showcase: stays dimmed & beneath StudioPopover even while Search dropdown is open */}
-              <div
-                className={`relative z-10 w-full flex flex-col items-center transition-opacity duration-300 ${
-                  vibePanelOpen ? 'opacity-20 pointer-events-none' : 'opacity-100'
-                }`}
-              >
-                {/* Live Room Aura Preset Strip */}
-                <div className="flex items-center justify-center gap-1.5 mt-3.5 flex-wrap max-w-[840px]">
-                  {VIBE_PRESETS.slice(0, 7).map((p) => {
-                    const active = activePresetId === p.id;
-                    return (
-                      <button
-                        key={p.id}
-                        type="button"
-                        onClick={() => applyPreset(p.id)}
-                        title={`${p.name} — ${p.description}`}
-                        className={`aura-card-sheen flex items-center gap-2 px-3 py-1 rounded-full text-[11px] transition-all cursor-pointer border ${
-                          active
-                            ? 'bg-white/[0.14] border-white/35 text-white font-semibold'
-                            : 'bg-white/[0.03] hover:bg-white/[0.08] border-white/[0.07] text-white/60 hover:text-white'
-                        }`}
-                      >
-                        <span
-                          className="w-2.5 h-2.5 rounded-full"
-                          style={{
-                            background: `linear-gradient(135deg, ${p.palette.primary}, ${p.palette.secondary})`,
-                            boxShadow: active ? `0 0 10px ${p.palette.primary}` : 'none',
-                          }}
-                        />
-                        <span>{p.name}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-
-                {/* Curated Play Instantly Bento Grid */}
-                <div className="w-[min(94vw,900px)] mt-4">
-                  <div className="flex items-center justify-between mb-2.5 px-1">
-                    <span className="text-[11px] font-mono-code uppercase tracking-widest text-white/45">
-                      {featured.some((s) => s.isFullTrack)
-                        ? 'Play Instantly · Full Tracks & Synced Lyrics'
-                        : 'Play Instantly · Hook Previews & Synced Lyrics'}
-                    </span>
-                    <span className="text-[10px] font-mono-code text-white/35">
-                      Vol {Math.round((muted ? 0 : volume) * 100)}% saved
-                    </span>
-                  </div>
-
-                  {featuredLoading ? (
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-                      {Array.from({ length: 8 }).map((_, i) => (
-                        <div key={i} className="h-[68px] rounded-2xl bg-white/[0.04] animate-pulse" />
-                      ))}
-                    </div>
-                  ) : featured.length === 0 ? (
-                    <div className="oled-surface rounded-2xl p-6 text-center space-y-2.5">
-                      <p className="text-xs text-white/55">
-                        Could not load featured tracks right now. Check your connection or drop an audio file above.
-                      </p>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setFeaturedLoading(true);
-                          void loadFeaturedSongs().then((songs) => {
-                            setFeatured(songs);
-                            setFeaturedLoading(false);
-                          });
-                        }}
-                        className="oled-pill px-4 py-1.5 rounded-full text-xs text-white/85 hover:text-white cursor-pointer"
-                      >
-                        Retry Loading Songs
-                      </button>
-                    </div>
-                  ) : (
-                    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-2.5">
-                      {featured.map((song) => (
-                        <div
-                          key={song.id}
-                          className="group oled-surface aura-card-sheen flex items-center gap-3 p-2 rounded-2xl hover:border-white/25 hover:-translate-y-0.5 transition-all duration-300 ease-apple"
-                        >
-                          <button
-                            type="button"
-                            onClick={() => void playSong(song, featured)}
-                            className="flex items-center gap-3 flex-1 min-w-0 text-left cursor-pointer"
-                          >
-                            <div
-                              className="relative w-11 h-11 rounded-xl overflow-hidden bg-zinc-900 shrink-0 border border-white/10 transition-transform duration-300 group-hover:scale-105"
-                              style={{ boxShadow: '0 6px 18px rgba(0,0,0,0.6)' }}
-                            >
-                              {song.artworkUrl ? (
-                                <img
-                                  src={song.artworkUrl}
-                                  alt={song.title}
-                                  loading="eager"
-                                  className="w-full h-full object-cover"
-                                />
-                              ) : (
-                                <Music2 className="w-4 h-4 m-3.5 text-white/30" />
-                              )}
-                              <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
-                                <Play className="w-4 h-4 text-white fill-current ml-0.5" />
-                              </div>
-                            </div>
-                            <div className="min-w-0 flex-1">
-                              <div className="text-xs font-semibold text-white truncate">{song.title}</div>
-                              <div className="text-[11px] text-white/45 truncate mt-0.5">{song.artist}</div>
-                              <div className="flex items-center gap-1.5 mt-1">
-                                <span
-                                  className={`px-1.5 py-0.2 rounded text-[9px] font-mono-code ${
-                                    song.isFullTrack
-                                      ? 'bg-emerald-500/15 text-emerald-400'
-                                      : 'bg-white/[0.06] text-white/45'
-                                  }`}
-                                >
-                                  {song.isFullTrack ? 'FULL' : '30s'}
-                                </span>
-                                <span className="text-[9px] font-mono-code text-white/30">
-                                  {fmtTime(song.fullDuration || song.duration)}
-                                </span>
-                              </div>
-                            </div>
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-
-                  {/* 1-Click Endless Radio Stations */}
-                  <div className="flex items-center justify-center gap-1.5 mt-4 flex-wrap">
-                    <span className="text-[10px] font-mono-code uppercase tracking-widest text-white/40 flex items-center gap-1 mr-1">
-                      <Radio className="w-3 h-3" style={{ color: primary }} /> Endless Radio:
-                    </span>
-                    {RADIO_STATIONS.map((st) => (
-                      <button
-                        key={st.label}
-                        type="button"
-                        onClick={() => void handleLaunchStation(st.label, st.q)}
-                        className="oled-pill aura-card-sheen px-3 py-1 rounded-full text-[11px] text-white/75 hover:text-white hover:border-white/25 transition-all cursor-pointer flex items-center gap-1.5"
-                      >
-                        <span
-                          className="w-1.5 h-1.5 rounded-full"
-                          style={{ backgroundColor: st.accent, boxShadow: `0 0 8px ${st.accent}` }}
-                        />
-                        <span>{st.label}</span>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
+        <ListeningRoom
+          featured={featured}
+          loading={featuredLoading}
+          activePreset={activePresetId}
+          studioOpen={vibePanelOpen}
+          savedVolume={Math.round((muted ? 0 : volume) * 100)}
+          form={sculptureForm}
+          palette={sculpturePalette}
+          onForm={setSculptureForm}
+          onDemo={() => void playSong(DEMO_TRACK, [DEMO_TRACK, ...featured])}
+          onPlay={song => void playSong(song, featured)}
+          onRetry={() => {
+            setFeaturedLoading(true);
+            void loadFeaturedSongs().then(songs => { setFeatured(songs); setFeaturedLoading(false); });
+          }}
+          onSuggest={query => setExternalSearchQuery({ query, nonce: ++searchChipNonceRef.current })}
+          onPreset={applyPreset}
+          onStation={handleLaunchStation}
+          onStudio={() => setVibePanelOpen(v => !v)}
+          onCompanion={openCompanion}
+          onCapture={handleStartLiveAudio}
+          search={{
+            accentColor: primary, externalQuery: externalSearchQuery, onSelectSong: handleSelectSearchSong,
+            onAddToQueue: handleAddSearchSongToQueue, onUploadLocalFile: handleLocalFile, onDropdownToggle: setSearchOpen,
+          }}
+        />
       )}
 
       {/* ====================================================================
@@ -2031,6 +1837,9 @@ const AuraStage: React.FC = () => {
 
           {/* Centerpiece: 12 Visual Worlds (Apple UI, Constellation, Fisheye, Branches, Web, etc.) */}
           <LyricsStage
+            sculptureForm={sculptureForm}
+            onFormChange={setSculptureForm}
+            controlsVisible={chromeVisible && !pureCinema}
             song={activeSong}
             lyrics={lyrics}
             lyricsLoading={lyricsLoading}
@@ -2056,20 +1865,21 @@ const AuraStage: React.FC = () => {
 
           {/* Bottom Floating Dock + 12 Visual World Pills */}
           <div
-            className={`fixed bottom-5 left-1/2 -translate-x-1/2 z-30 w-[min(96vw,960px)] transition-all duration-700 ease-apple ${
+            className={`stage-transport fixed bottom-5 left-1/2 -translate-x-1/2 z-30 w-[min(96vw,960px)] transition-all duration-700 ease-apple ${
               chromeVisible && !pureCinema
                 ? 'opacity-100 translate-y-0'
                 : 'opacity-0 translate-y-5 pointer-events-none'
             }`}
           >
             {/* 12 Visual World Pills */}
-            <div className="flex items-center justify-start sm:justify-center gap-1.5 mb-2 overflow-x-auto no-scrollbar px-2">
+            <div className="world-picker no-scrollbar" role="group" aria-label="Visual world">
               {LYRIC_STYLES.map((opt) => {
                 const active = blueprint.lyricStyle === opt.id;
                 return (
                   <button
                     key={opt.id}
                     type="button"
+                    aria-pressed={active}
                     onClick={() => updateVisualSetting({ lyricStyle: opt.id })}
                     className={`shrink-0 px-2.5 py-1 rounded-full text-[11px] font-grotesk transition-all duration-300 ease-apple cursor-pointer ${
                       active ? 'text-black font-semibold' : 'oled-pill text-white/65 hover:text-white'
@@ -2082,7 +1892,7 @@ const AuraStage: React.FC = () => {
               })}
             </div>
 
-            <div className="oled-surface rounded-2xl px-4 py-3 flex flex-col gap-2">
+            <div className="transport-panel oled-surface rounded-2xl px-4 py-3 flex flex-col gap-2">
               {activeSong.source !== 'live_tab' && activeSong.source !== 'live_mic' && (
                 <div className="flex items-center gap-3 text-[10px] font-mono-code text-white/45">
                   <span ref={timeLabelRef} className="w-8 text-right tabular-nums">
@@ -2120,6 +1930,18 @@ const AuraStage: React.FC = () => {
                         transform: 'scaleX(0)',
                         background: `linear-gradient(90deg, ${primary}, ${blueprint.palette.accent})`,
                       }}
+                    />
+                    <input
+                      ref={seekInputRef}
+                      type="range"
+                      aria-label="Seek playback"
+                      min={0}
+                      max={duration || 1}
+                      step={1}
+                      defaultValue={0}
+                      onChange={e => audioRef.current?.seek(Number(e.currentTarget.value))}
+                      onClick={e => e.stopPropagation()}
+                      className="seek-control"
                     />
                   </div>
                   <span className="w-8 tabular-nums">{fmtTime(duration)}</span>

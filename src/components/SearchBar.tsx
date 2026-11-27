@@ -178,7 +178,8 @@ export const SearchBar: React.FC<SearchBarProps> = React.memo(({
             allowAutoOpenRef.current = true;
             setQuery(e.target.value);
           }}
-          placeholder={compact ? 'Search song... (Press /)' : 'Search any song or artist (e.g. No Lie, Starboy, Tum Hi Ho)...'}
+          aria-label="Search songs and artists"
+          placeholder={compact ? 'Search songs…' : 'Search any song or artist…'}
           className={`flex-1 min-w-0 bg-transparent text-white placeholder:text-white/40 outline-none ${
             compact ? 'text-xs sm:text-sm' : 'text-sm sm:text-base'
           }`}
@@ -187,6 +188,7 @@ export const SearchBar: React.FC<SearchBarProps> = React.memo(({
         {query && (
           <button
             type="button"
+            aria-label="Clear search"
             onClick={() => {
               allowAutoOpenRef.current = false;
               setQuery('');
@@ -199,6 +201,7 @@ export const SearchBar: React.FC<SearchBarProps> = React.memo(({
           </button>
         )}
 
+        {!compact && !query && <kbd aria-hidden="true" className="search-key">/</kbd>}
         <label
           title="Play local MP3 / WAV file"
           className="p-1.5 rounded-full bg-white/[0.06] hover:bg-white/[0.14] text-white/65 hover:text-white transition-colors cursor-pointer shrink-0"
@@ -207,7 +210,8 @@ export const SearchBar: React.FC<SearchBarProps> = React.memo(({
           <input
             type="file"
             accept="audio/*"
-            className="hidden"
+            aria-label="Play a local audio file"
+            className="sr-only"
             onChange={(e) => {
               const f = e.target.files?.[0];
               if (f) {
