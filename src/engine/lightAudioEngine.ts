@@ -496,9 +496,10 @@ export class LightAudioEngine {
         host.style.position = 'fixed';
         host.style.right = '0';
         host.style.bottom = '0';
-        host.style.width = '200px';
-        host.style.height = '112px';
-        host.style.opacity = '0.001';
+        host.style.width = '1px';
+        host.style.height = '1px';
+        host.style.opacity = '0';
+        host.style.clipPath = 'inset(50%)';
         host.style.pointerEvents = 'none';
         host.style.overflow = 'hidden';
         host.style.zIndex = '-1';
