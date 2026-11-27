@@ -55,6 +55,7 @@ import {
   parseLocalFileName,
   setCustomSaavnBaseUrl,
   upgradeToFullSaavnTrack,
+  upgradeToFullYoutubeTrack,
 } from './services/musicApi';
 import { loadUserSettings, saveUserSettings, type EqBands } from './services/settingsStorage';
 import { computeLyricCursor, type LyricPhase } from './services/lyricSync';
@@ -472,11 +473,21 @@ const AuraStage: React.FC = () => {
       let effectiveSong = song;
       let upgradedToFull = false;
       if (!song.isFullTrack && song.source === 'itunes') {
-        const upgrade = await Promise.race<SongItem | null>([
-          upgradeToFullSaavnTrack(song),
-          new Promise<null>((resolve) => window.setTimeout(() => resolve(null), 1200)),
-        ]);
-        if (activeSongIdRef.current !== song.id) return;
+        let upgrade: SongItem | null = null;
+        if (getCustomSaavnBaseUrl()) {
+          upgrade = await Promise.race<SongItem | null>([
+            upgradeToFullSaavnTrack(song),
+            new Promise<null>((resolve) => window.setTimeout(() => resolve(null), 1500)),
+          ]);
+          if (activeSongIdRef.current !== song.id) return;
+        }
+        if (!upgrade) {
+          upgrade = await Promise.race<SongItem | null>([
+            upgradeToFullYoutubeTrack(song),
+            new Promise<null>((resolve) => window.setTimeout(() => resolve(null), 3200)),
+          ]);
+          if (activeSongIdRef.current !== song.id) return;
+        }
         if (upgrade) {
           effectiveSong = upgrade;
           upgradedToFull = true;
@@ -572,7 +583,11 @@ const AuraStage: React.FC = () => {
         initialOffset = 0;
         setIsSyncLocked(true);
         if (upgradedToFull && fetchedLyrics.length > 0) {
-          showToast('Full 320kbps Audio · Exact 0:00 Lyric Sync');
+          showToast(
+            effectiveSong.source === 'youtube'
+              ? 'Full Track · Exact 0:00 Lyric Sync'
+              : 'Full 320kbps Audio · Exact 0:00 Lyric Sync'
+          );
         }
       } else if (fetchedLyrics.length > 0) {
         const calibrated = getKnownPreviewOffset(effectiveSong);

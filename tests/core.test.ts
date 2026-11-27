@@ -11,6 +11,7 @@ import {
   fetchInfiniteRadioSongs,
   fetchSyncedLyricsDetailed,
   getKnownPreviewOffset,
+  getKnownYoutubeFullTrack,
   launchRadioStation,
   loadFeaturedSongs,
   makeSongKey,
@@ -22,6 +23,7 @@ import {
   searchRealSongs,
   setCustomSaavnBaseUrl,
   upgradeToFullSaavnTrack,
+  upgradeToFullYoutubeTrack,
 } from '../src/services/musicApi.ts';
 import { computeLyricCursor, getWordVisualIcon } from '../src/services/lyricSync.ts';
 import { loadUserSettings, PREFS_COOKIE_NAME, sanitizeSettings, saveUserSettings } from '../src/services/settingsStorage.ts';
@@ -1152,5 +1154,237 @@ test('LightAudioEngine BPM groove & vocal impulse engine reacts to playback cloc
   } finally {
     (globalThis as Record<string, unknown>).Audio = prevAudio;
     (globalThis as Record<string, unknown>).window = prevWin;
+  }
+});
+
+test('getKnownYoutubeFullTrack, upgradeToFullYoutubeTrack, and LightAudioEngine youtube:// playback deliver full tracks', async () => {
+  // 1. Instant verified studio YouTube full-track lookup for Featured songs
+  const noLieYt = getKnownYoutubeFullTrack({
+    id: 'itunes-1444609119',
+    title: 'No Lie (feat. Dua Lipa)',
+    artist: 'Sean Paul',
+    source: 'itunes',
+    isFullTrack: false,
+  });
+  assert.deepEqual(noLieYt, { videoId: 'jOF8gqpoPgs', duration: 222 });
+
+  const starboyYt = getKnownYoutubeFullTrack({
+    id: 'itunes-1440870375',
+    title: 'Starboy (feat. Daft Punk)',
+    artist: 'The Weeknd',
+    source: 'itunes',
+    isFullTrack: false,
+  });
+  assert.deepEqual(starboyYt, { videoId: '3_g2un5M350', duration: 231 });
+
+  // Already-full tracks return null
+  assert.equal(
+    getKnownYoutubeFullTrack({
+      id: 'itunes-1444609119',
+      title: 'No Lie',
+      artist: 'Sean Paul',
+      source: 'youtube',
+      isFullTrack: true,
+    }),
+    null
+  );
+
+  // 2. Live Piped music search upgrades arbitrary searched tracks while rejecting slowed/karaoke/shorts
+  const origFetch = globalThis.fetch;
+  resetSaavnClientStateForTests();
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.includes('api.piped.private.coffee/search')) {
+      return new Response(
+        JSON.stringify({
+          items: [
+            {
+              url: '/watch?v=short123456',
+              title: 'Blinding Lights',
+              uploaderName: 'The Weeknd',
+              duration: 28,
+              isShort: true,
+            },
+            {
+              url: '/watch?v=slowed12345',
+              title: 'Blinding Lights (Slowed + Reverb)',
+              uploaderName: 'Lofi Mixes',
+              duration: 245,
+            },
+            {
+              url: '/watch?v=fHI8X4OXluQ',
+              title: 'Blinding Lights',
+              uploaderName: 'The Weeknd - Topic',
+              duration: 201,
+            },
+          ],
+        }),
+        { status: 200 }
+      );
+    }
+    return new Response('{}', { status: 404 });
+  }) as typeof fetch;
+
+  try {
+    const blindingPreview: SongItem = {
+      id: 'itunes-1488408568',
+      title: 'Blinding Lights',
+      artist: 'The Weeknd',
+      album: 'After Hours',
+      duration: 30,
+      fullDuration: 200,
+      artworkUrl: 'https://art.example/blinding.jpg',
+      audioUrl: 'https://audio-ssl.itunes.apple.com/blinding.m4a',
+      source: 'itunes',
+      isFullTrack: false,
+    };
+    const upgraded = await upgradeToFullYoutubeTrack(blindingPreview);
+    assert.ok(upgraded, 'Must upgrade Blinding Lights to full YouTube studio track');
+    assert.equal(upgraded.id, 'itunes-1488408568');
+    assert.equal(upgraded.source, 'youtube');
+    assert.equal(upgraded.isFullTrack, true);
+    assert.equal(upgraded.duration, 201);
+    assert.equal(upgraded.audioUrl, 'youtube://fHI8X4OXluQ');
+  } finally {
+    resetSaavnClientStateForTests();
+    globalThis.fetch = origFetch;
+  }
+
+  // 3. LightAudioEngine drives youtube:// full playback, seek, volume, pause, and ended events
+  class StubAudio {
+    crossOrigin: string | null = null;
+    preload = '';
+    src = '';
+    volume = 1;
+    currentTime = 0;
+    paused = true;
+    ended = false;
+    duration = 0;
+    addEventListener() {}
+    removeAttribute(name: string) {
+      if (name === 'src') this.src = '';
+    }
+    async play() {
+      this.paused = false;
+    }
+    pause() {
+      this.paused = true;
+    }
+  }
+
+  let ytStateCb: ((ev: { data: number; target: unknown }) => void) | undefined;
+  let mockYtTime = 0;
+  let mockYtVol = 100;
+  let mockYtMuted = false;
+  let mockYtDestroyed = false;
+
+  class MockYtPlayer {
+    constructor(
+      _el: unknown,
+      opts: {
+        events?: {
+          onReady?: (ev: { target: MockYtPlayer }) => void;
+          onStateChange?: (ev: { data: number; target: MockYtPlayer }) => void;
+        };
+      }
+    ) {
+      ytStateCb = opts.events?.onStateChange;
+      queueMicrotask(() => {
+        opts.events?.onReady?.({ target: this });
+        opts.events?.onStateChange?.({ data: 1, target: this });
+      });
+    }
+    loadVideoById() {
+      mockYtTime = 0;
+      queueMicrotask(() => ytStateCb?.({ data: 1, target: this }));
+    }
+    playVideo() {
+      ytStateCb?.({ data: 1, target: this });
+    }
+    pauseVideo() {
+      ytStateCb?.({ data: 2, target: this });
+    }
+    stopVideo() {}
+    seekTo(sec: number) {
+      mockYtTime = sec;
+    }
+    setVolume(v: number) {
+      mockYtVol = v;
+    }
+    mute() {
+      mockYtMuted = true;
+    }
+    unMute() {
+      mockYtMuted = false;
+    }
+    getCurrentTime() {
+      return mockYtTime;
+    }
+    getDuration() {
+      return 222;
+    }
+    getPlayerState() {
+      return 1;
+    }
+    destroy() {
+      mockYtDestroyed = true;
+    }
+  }
+
+  const prevAudio = (globalThis as Record<string, unknown>).Audio;
+  const prevWin = (globalThis as Record<string, unknown>).window;
+  const prevDoc = (globalThis as Record<string, unknown>).document;
+  (globalThis as Record<string, unknown>).Audio = StubAudio;
+  (globalThis as Record<string, unknown>).window = {
+    location: { origin: 'https://pranjal3125.github.io' },
+    setTimeout,
+    clearTimeout,
+    YT: { Player: MockYtPlayer },
+  };
+  (globalThis as Record<string, unknown>).document = {
+    createElement: () => ({
+      style: {},
+      setAttribute() {},
+      appendChild() {},
+      remove() {},
+      firstElementChild: {},
+    }),
+    body: { appendChild() {} },
+  };
+
+  try {
+    const engine = new LightAudioEngine({ volume: 0.4 });
+    let endedFired = false;
+    engine.onEnded = () => {
+      endedFired = true;
+    };
+    await engine.loadAndPlay('youtube://jOF8gqpoPgs');
+    assert.equal(engine.isPlaying(), true);
+    assert.equal(engine.getDuration(), 222);
+    assert.equal(mockYtVol, 40);
+    assert.equal(mockYtMuted, false);
+
+    engine.seek(54.5);
+    assert.ok(engine.getCurrentTime() >= 54.5);
+
+    engine.setVolume(0);
+    assert.equal(mockYtMuted, true);
+
+    engine.pause();
+    assert.equal(engine.isPlaying(), false);
+
+    engine.play();
+    assert.equal(engine.isPlaying(), true);
+
+    ytStateCb?.({ data: 0, target: {} });
+    assert.equal(endedFired, true);
+    assert.equal(engine.isPlaying(), false);
+
+    engine.dispose();
+    assert.equal(mockYtDestroyed, true);
+  } finally {
+    (globalThis as Record<string, unknown>).Audio = prevAudio;
+    (globalThis as Record<string, unknown>).window = prevWin;
+    (globalThis as Record<string, unknown>).document = prevDoc;
   }
 });

@@ -21,10 +21,123 @@ export interface AudioSampleOutput {
   spectrum: Float32Array;
 }
 
+interface YtPlayerLike {
+  loadVideoById: (opts: string | { videoId: string; startSeconds?: number }) => void;
+  playVideo: () => void;
+  pauseVideo: () => void;
+  stopVideo: () => void;
+  seekTo: (seconds: number, allowSeekAhead: boolean) => void;
+  setVolume: (vol: number) => void;
+  mute: () => void;
+  unMute: () => void;
+  getCurrentTime: () => number;
+  getDuration: () => number;
+  getPlayerState: () => number;
+  destroy: () => void;
+}
+
+interface YtApiGlobal {
+  Player: new (
+    el: HTMLElement,
+    opts: {
+      width: number;
+      height: number;
+      videoId: string;
+      playerVars?: Record<string, string | number>;
+      events?: {
+        onReady?: (ev: { target: YtPlayerLike }) => void;
+        onStateChange?: (ev: { data: number; target: YtPlayerLike }) => void;
+        onError?: (ev: { data: number; target: YtPlayerLike }) => void;
+      };
+    }
+  ) => YtPlayerLike;
+  PlayerState?: {
+    UNSTARTED: number;
+    ENDED: number;
+    PLAYING: number;
+    PAUSED: number;
+    BUFFERING: number;
+    CUED: number;
+  };
+}
+
+let ytApiLoadPromise: Promise<YtApiGlobal> | null = null;
+
+function loadYouTubeIframeApi(): Promise<YtApiGlobal> {
+  if (typeof window === 'undefined' || typeof document === 'undefined') {
+    return Promise.reject(new Error('YouTube IFrame API requires a browser DOM'));
+  }
+  const win = window as unknown as { YT?: YtApiGlobal; onYouTubeIframeAPIReady?: () => void };
+  if (win.YT?.Player) {
+    return Promise.resolve(win.YT);
+  }
+  if (ytApiLoadPromise) return ytApiLoadPromise;
+
+  ytApiLoadPromise = new Promise<YtApiGlobal>((resolve, reject) => {
+    let settled = false;
+    const finish = (err?: Error) => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timer);
+      if (err) {
+        ytApiLoadPromise = null;
+        reject(err);
+      } else if (win.YT?.Player) {
+        resolve(win.YT);
+      } else {
+        ytApiLoadPromise = null;
+        reject(new Error('YouTube IFrame API missing YT.Player'));
+      }
+    };
+
+    const timer = window.setTimeout(() => finish(new Error('YouTube IFrame API timeout')), 8500);
+    const prevReady = win.onYouTubeIframeAPIReady;
+    win.onYouTubeIframeAPIReady = () => {
+      try {
+        prevReady?.();
+      } catch {
+        // ignore
+      }
+      finish();
+    };
+
+    const existing = document.querySelector('script[src*="youtube.com/iframe_api"]') as HTMLScriptElement | null;
+    if (!existing) {
+      const script = document.createElement('script');
+      script.src = 'https://www.youtube.com/iframe_api';
+      script.async = true;
+      script.onerror = () => finish(new Error('Failed to load YouTube IFrame API'));
+      (document.head || document.documentElement).appendChild(script);
+    } else if (win.YT?.Player) {
+      finish();
+    }
+  });
+
+  return ytApiLoadPromise;
+}
+
+export function extractYoutubeVideoId(url: string): string | null {
+  if (!url.startsWith('youtube://')) return null;
+  const id = url.slice('youtube://'.length).trim();
+  return /^[A-Za-z0-9_-]{11}$/.test(id) ? id : null;
+}
+
 export class LightAudioEngine {
   private primaryAudio: HTMLAudioElement;
   private fallbackAudio: HTMLAudioElement;
   private usingFallback = false;
+  private usingYoutube = false;
+  private ytHostEl: HTMLDivElement | null = null;
+  private ytPlayer: YtPlayerLike | null = null;
+  private ytReady = false;
+  private ytPlaying = false;
+  private ytDuration = 0;
+  private ytLastPollSec = 0;
+  private ytLastPollMs = 0;
+  private ytPendingResolve: (() => void) | null = null;
+  private ytPendingReject: ((err: Error) => void) | null = null;
+  private ytPendingTimer: number | null = null;
+  private ytLoadSeq = 0;
   private loadSeq = 0;
 
   private ctx: AudioContext | null = null;
@@ -244,6 +357,201 @@ export class LightAudioEngine {
     }
   }
 
+  private clearYoutubePending(): void {
+    if (this.ytPendingTimer !== null && typeof window !== 'undefined') {
+      window.clearTimeout(this.ytPendingTimer);
+    }
+    this.ytPendingTimer = null;
+    this.ytPendingResolve = null;
+    this.ytPendingReject = null;
+  }
+
+  private stopYoutubeIfActive(): void {
+    this.clearYoutubePending();
+    if (this.usingYoutube) {
+      this.usingYoutube = false;
+      this.ytPlaying = false;
+      this.ytDuration = 0;
+      this.ytLastPollSec = 0;
+      this.ytLastPollMs = 0;
+      try {
+        this.ytPlayer?.pauseVideo();
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  private applyYoutubeVolume(): void {
+    if (!this.ytPlayer || !this.ytReady) return;
+    try {
+      const pct = Math.round(this.volumeState * 100);
+      if (pct <= 0) {
+        this.ytPlayer.mute();
+      } else {
+        this.ytPlayer.unMute();
+        this.ytPlayer.setVolume(pct);
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  private handleYoutubeStateChange(state: number, target: YtPlayerLike): void {
+    if (!this.usingYoutube || this.ytLoadSeq !== this.loadSeq) return;
+    if (state === 1) {
+      // PLAYING
+      this.ytPlaying = true;
+      try {
+        const d = target.getDuration();
+        if (isFinite(d) && d > 0) {
+          this.ytDuration = d;
+          this.onDurationChange?.(d);
+        }
+        const t = target.getCurrentTime();
+        if (isFinite(t) && t >= 0) {
+          this.ytLastPollSec = t;
+          this.ytLastPollMs = performance.now();
+        }
+      } catch {
+        // ignore
+      }
+      this.applyYoutubeVolume();
+      this.onPlayStateChange?.(true);
+      const res = this.ytPendingResolve;
+      this.clearYoutubePending();
+      res?.();
+    } else if (state === 2) {
+      // PAUSED
+      this.ytPlaying = false;
+      this.onPlayStateChange?.(false);
+    } else if (state === 0) {
+      // ENDED
+      this.ytPlaying = false;
+      this.onPlayStateChange?.(false);
+      this.onEnded?.();
+    }
+  }
+
+  private handleYoutubeError(code: number): void {
+    if (!this.usingYoutube || this.ytLoadSeq !== this.loadSeq) return;
+    this.ytPlaying = false;
+    const rej = this.ytPendingReject;
+    this.clearYoutubePending();
+    rej?.(new Error(`YouTube embed playback error (${code})`));
+  }
+
+  private async loadAndPlayYoutube(videoId: string, seq: number): Promise<void> {
+    this.ytLoadSeq = seq;
+    this.usingYoutube = true;
+    this.ytPlaying = false;
+    this.ytDuration = 0;
+    this.ytLastPollSec = 0;
+    this.ytLastPollMs = performance.now();
+
+    const YT = await loadYouTubeIframeApi();
+    if (seq !== this.loadSeq) return;
+
+    return new Promise<void>((resolve, reject) => {
+      this.clearYoutubePending();
+      this.ytPendingResolve = resolve;
+      this.ytPendingReject = reject;
+      this.ytPendingTimer = window.setTimeout(() => {
+        if (seq !== this.loadSeq) return;
+        // If player is cued/unstarted (e.g. autoplay gate) keep track loaded so user can press Play
+        if (this.ytPlayer && this.ytReady) {
+          try {
+            const st = this.ytPlayer.getPlayerState();
+            if (st === 5 || st === -1 || st === 2) {
+              const res = this.ytPendingResolve;
+              this.clearYoutubePending();
+              res?.();
+              return;
+            }
+          } catch {
+            // ignore
+          }
+        }
+        const rej = this.ytPendingReject;
+        this.clearYoutubePending();
+        rej?.(new Error('YouTube playback start timed out'));
+      }, 6500);
+
+      if (this.ytPlayer && this.ytReady) {
+        try {
+          this.applyYoutubeVolume();
+          this.ytPlayer.loadVideoById({ videoId, startSeconds: 0 });
+          this.ytPlayer.playVideo();
+        } catch (err) {
+          this.clearYoutubePending();
+          reject(err instanceof Error ? err : new Error('YouTube loadVideoById failed'));
+        }
+        return;
+      }
+
+      if (!this.ytHostEl) {
+        const host = document.createElement('div');
+        host.setAttribute('data-aura-yt-host', 'true');
+        host.setAttribute('aria-hidden', 'true');
+        host.style.position = 'fixed';
+        host.style.right = '0';
+        host.style.bottom = '0';
+        host.style.width = '200px';
+        host.style.height = '112px';
+        host.style.opacity = '0.001';
+        host.style.pointerEvents = 'none';
+        host.style.overflow = 'hidden';
+        host.style.zIndex = '-1';
+        const mount = document.createElement('div');
+        host.appendChild(mount);
+        document.body.appendChild(host);
+        this.ytHostEl = host;
+      }
+
+      const mountTarget = (this.ytHostEl.firstElementChild as HTMLElement) || this.ytHostEl;
+      const origin =
+        typeof window !== 'undefined' && /^https?:/i.test(window.location.origin)
+          ? window.location.origin
+          : undefined;
+
+      try {
+        this.ytPlayer = new YT.Player(mountTarget, {
+          width: 200,
+          height: 112,
+          videoId,
+          playerVars: {
+            autoplay: 1,
+            controls: 0,
+            disablekb: 1,
+            fs: 0,
+            iv_load_policy: 3,
+            modestbranding: 1,
+            playsinline: 1,
+            rel: 0,
+            ...(origin ? { origin } : {}),
+          },
+          events: {
+            onReady: (ev) => {
+              this.ytReady = true;
+              if (!this.usingYoutube || this.ytLoadSeq !== this.loadSeq) return;
+              this.applyYoutubeVolume();
+              try {
+                ev.target.playVideo();
+              } catch {
+                // ignore
+              }
+            },
+            onStateChange: (ev) => this.handleYoutubeStateChange(ev.data, ev.target),
+            onError: (ev) => this.handleYoutubeError(ev.data),
+          },
+        });
+      } catch (err) {
+        this.clearYoutubePending();
+        reject(err instanceof Error ? err : new Error('YouTube player init failed'));
+      }
+    });
+  }
+
   public async loadAndPlay(url: string): Promise<void> {
     const seq = ++this.loadSeq;
     this.stopLiveCapture();
@@ -252,6 +560,15 @@ export class LightAudioEngine {
     this.prevFreqData.fill(0);
     this.vocalImpulse = 0;
     this.lineAccentImpulse = 0;
+
+    const ytVideoId = extractYoutubeVideoId(url);
+    if (ytVideoId) {
+      this.primaryAudio.removeAttribute('src');
+      this.fallbackAudio.removeAttribute('src');
+      await this.loadAndPlayYoutube(ytVideoId, seq);
+      return;
+    }
+    this.stopYoutubeIfActive();
 
     const origin = this.getOrigin(url);
     if (origin && this.corsBlockedOrigins.has(origin)) {
@@ -311,6 +628,7 @@ export class LightAudioEngine {
   }
 
   public async startTabCapture(): Promise<void> {
+    this.stopYoutubeIfActive();
     this.primaryAudio.pause();
     this.fallbackAudio.pause();
     this.stopLiveCapture();
@@ -354,6 +672,7 @@ export class LightAudioEngine {
   }
 
   public async startMicCapture(): Promise<void> {
+    this.stopYoutubeIfActive();
     this.primaryAudio.pause();
     this.fallbackAudio.pause();
     this.stopLiveCapture();
@@ -379,6 +698,15 @@ export class LightAudioEngine {
 
   public play(): void {
     if (this.liveMode !== 'none') return;
+    if (this.usingYoutube) {
+      this.applyYoutubeVolume();
+      try {
+        this.ytPlayer?.playVideo();
+      } catch {
+        // ignore
+      }
+      return;
+    }
     if (!this.usingFallback) this.ensureContext();
     void this.activeEl.play().catch(() => {
       // Ignore transient play rejection (e.g. autoplay lock before user gesture)
@@ -391,6 +719,16 @@ export class LightAudioEngine {
       this.onPlayStateChange?.(false);
       return;
     }
+    if (this.usingYoutube) {
+      this.ytPlaying = false;
+      try {
+        this.ytPlayer?.pauseVideo();
+      } catch {
+        // ignore
+      }
+      this.onPlayStateChange?.(false);
+      return;
+    }
     this.activeEl.pause();
   }
 
@@ -400,12 +738,18 @@ export class LightAudioEngine {
       this.onPlayStateChange?.(false);
       return;
     }
+    if (this.usingYoutube) {
+      if (this.ytPlaying) this.pause();
+      else this.play();
+      return;
+    }
     if (this.activeEl.paused) this.play();
     else this.pause();
   }
 
   public isPlaying(): boolean {
     if (this.liveMode !== 'none') return true;
+    if (this.usingYoutube) return this.ytPlaying;
     return !this.activeEl.paused && !this.activeEl.ended;
   }
 
@@ -413,7 +757,18 @@ export class LightAudioEngine {
     if (this.liveMode !== 'none') return;
     if (isFinite(sec)) {
       const dur = this.getDuration();
-      this.activeEl.currentTime = Math.max(0, dur > 0 ? Math.min(dur, sec) : sec);
+      const target = Math.max(0, dur > 0 ? Math.min(dur, sec) : sec);
+      if (this.usingYoutube) {
+        this.ytLastPollSec = target;
+        this.ytLastPollMs = performance.now();
+        try {
+          this.ytPlayer?.seekTo(target, true);
+        } catch {
+          // ignore
+        }
+        return;
+      }
+      this.activeEl.currentTime = target;
     }
   }
 
@@ -422,11 +777,35 @@ export class LightAudioEngine {
     this.volumeState = clamped;
     this.primaryAudio.volume = clamped;
     this.fallbackAudio.volume = clamped;
+    if (this.usingYoutube) {
+      this.applyYoutubeVolume();
+    }
   }
 
   public getCurrentTime(): number {
     if (this.liveMode !== 'none' && this.liveStartMs > 0) {
       return Math.max(0, (performance.now() - this.liveStartMs) / 1000);
+    }
+    if (this.usingYoutube) {
+      if (this.ytPlayer && this.ytReady) {
+        try {
+          const polled = this.ytPlayer.getCurrentTime();
+          if (isFinite(polled) && polled >= 0) {
+            const now = performance.now();
+            // Smooth sub-frame interpolation between YouTube's ~4-10Hz clock updates
+            if (Math.abs(polled - this.ytLastPollSec) > 0.001 || !this.ytPlaying) {
+              this.ytLastPollSec = polled;
+              this.ytLastPollMs = now;
+              return polled;
+            }
+            const extra = Math.min(0.32, Math.max(0, (now - this.ytLastPollMs) * 0.001));
+            return this.ytLastPollSec + extra;
+          }
+        } catch {
+          // ignore
+        }
+      }
+      return this.ytLastPollSec;
     }
     return this.activeEl.currentTime || 0;
   }
@@ -438,10 +817,25 @@ export class LightAudioEngine {
   }
 
   public getDuration(): number {
+    if (this.usingYoutube) {
+      if (this.ytPlayer && this.ytReady) {
+        try {
+          const d = this.ytPlayer.getDuration();
+          if (isFinite(d) && d > 0) {
+            this.ytDuration = d;
+            return d;
+          }
+        } catch {
+          // ignore
+        }
+      }
+      return this.ytDuration;
+    }
     return isFinite(this.activeEl.duration) ? this.activeEl.duration : 0;
   }
 
   public isLiveFftActive(): boolean {
+    if (this.usingYoutube) return false;
     return Boolean(this.analyser && ((!this.usingFallback && this.corsConnected) || this.liveMode !== 'none'));
   }
 
@@ -493,7 +887,7 @@ export class LightAudioEngine {
     const rel = 1 - Math.exp(-6.5 * dt);
     const specSmooth = 1 - Math.exp(-22 * dt);
 
-    if (this.analyser && ((!this.usingFallback && this.corsConnected) || this.liveMode !== 'none')) {
+    if (!this.usingYoutube && this.analyser && ((!this.usingFallback && this.corsConnected) || this.liveMode !== 'none')) {
       this.analyser.getByteFrequencyData(this.freqData);
       const binCount = this.freqData.length;
       const sampleRate = this.ctx?.sampleRate || 44100;
@@ -666,6 +1060,18 @@ export class LightAudioEngine {
 
   public dispose(): void {
     this.stopLiveCapture();
+    this.stopYoutubeIfActive();
+    try {
+      this.ytPlayer?.destroy();
+    } catch {
+      // ignore
+    }
+    this.ytPlayer = null;
+    this.ytReady = false;
+    if (this.ytHostEl) {
+      this.ytHostEl.remove();
+      this.ytHostEl = null;
+    }
     this.primaryAudio.pause();
     this.primaryAudio.src = '';
     this.fallbackAudio.pause();

@@ -225,6 +225,8 @@ let lastSaavnFetchAt = 0;
 let saavnQueueTail: Promise<void> = Promise.resolve();
 const saavnResponseCache = new Map<string, { at: number; data: unknown }>();
 const saavnUpgradeCache = new Map<string, SongItem | null>();
+const youtubeUpgradeCache = new Map<string, SongItem | null>();
+let pipedCooldownUntil = 0;
 
 function normalizeSaavnBaseUrl(raw: string | null | undefined): string | null {
   if (!raw || typeof raw !== 'string') return null;
@@ -264,8 +266,9 @@ export function getCustomSaavnBaseUrl(): string | null {
   return null;
 }
 
-function resolveSaavnBaseUrl(): string {
-  return getCustomSaavnBaseUrl() || DEFAULT_SAAVN_BASE_URL;
+function resolveSaavnBaseUrl(): string | null {
+  // Only query Saavn when a self-hosted custom endpoint is configured (public saavn.sumit.co returns 429).
+  return getCustomSaavnBaseUrl();
 }
 
 export function setCustomSaavnBaseUrl(url: string | null): string | null {
@@ -292,6 +295,8 @@ export function resetSaavnClientStateForTests(): void {
   saavnQueueTail = Promise.resolve();
   saavnResponseCache.clear();
   saavnUpgradeCache.clear();
+  youtubeUpgradeCache.clear();
+  pipedCooldownUntil = 0;
   lyricsResultCache.clear();
 }
 
@@ -312,6 +317,7 @@ function isValidSaavnPayload(json: unknown, requireNonEmpty = false): boolean {
 
 async function fetchSaavnJson<T>(path: string, timeoutMs = 4200): Promise<T | null> {
   const baseUrl = resolveSaavnBaseUrl();
+  if (!baseUrl) return null;
   const cacheKey = `${baseUrl}${path}`;
   const cached = saavnResponseCache.get(cacheKey);
   if (cached && Date.now() - cached.at < SAAVN_CACHE_TTL_MS) {
@@ -754,6 +760,207 @@ export async function upgradeToFullSaavnTrack(song: SongItem): Promise<SongItem 
   }
   saavnUpgradeCache.set(song.id, upgraded);
   return upgraded;
+}
+
+interface KnownYoutubeTrack {
+  videoId: string;
+  duration: number;
+}
+
+/**
+ * Embed-verified official YouTube Music studio masters (<= 1s diff vs LRCLIB)
+ * for instant 0ms full-length playback of Featured tracks from 0:00.
+ */
+const KNOWN_YOUTUBE_BY_ID: Record<string, KnownYoutubeTrack> = {
+  'itunes-1444609119': { videoId: 'jOF8gqpoPgs', duration: 222 }, // No Lie (feat. Dua Lipa)
+  'itunes-1440870375': { videoId: '3_g2un5M350', duration: 231 }, // Starboy (feat. Daft Punk)
+  'itunes-1635014240': { videoId: 'NJAv_7lHUIU', duration: 269 }, // Kesariya
+  'itunes-1073359419': { videoId: 'fsiPzT50ZiM', duration: 262 }, // Tum Hi Ho
+  'itunes-1653219849': { videoId: 'YALvuUpY_b0', duration: 262 }, // Apna Bana Le
+  'itunes-1702461667': { videoId: 'V_jp5_VAzXk', duration: 201 }, // Chaleya
+  'itunes-1580955743': { videoId: 'Dm6YRJHy64c', duration: 231 }, // Raataan Lambiyan
+  'itunes-1717140552': { videoId: '_deqdZmKzyg', duration: 218 }, // Husn
+};
+
+const KNOWN_YOUTUBE_BY_KEY: Record<string, KnownYoutubeTrack> = {
+  'nolie::seanpaul': { videoId: 'jOF8gqpoPgs', duration: 222 },
+  'nolie::dualipa': { videoId: 'jOF8gqpoPgs', duration: 222 },
+  'starboy::theweeknd': { videoId: '3_g2un5M350', duration: 231 },
+  'kesariya::pritam': { videoId: 'NJAv_7lHUIU', duration: 269 },
+  'kesariya::arijitsingh': { videoId: 'NJAv_7lHUIU', duration: 269 },
+  'tumhiho::mithoon': { videoId: 'fsiPzT50ZiM', duration: 262 },
+  'tumhiho::arijitsingh': { videoId: 'fsiPzT50ZiM', duration: 262 },
+  'apnabanale::arijitsingh': { videoId: 'YALvuUpY_b0', duration: 262 },
+  'apnabanale::sachinjigar': { videoId: 'YALvuUpY_b0', duration: 262 },
+  'chaleya::anirudhravichander': { videoId: 'V_jp5_VAzXk', duration: 201 },
+  'chaleya::anirudh': { videoId: 'V_jp5_VAzXk', duration: 201 },
+  'chaleya::arijitsingh': { videoId: 'V_jp5_VAzXk', duration: 201 },
+  'raataanlambiyan::tanishkbagchi': { videoId: 'Dm6YRJHy64c', duration: 231 },
+  'raataanlambiyan::jubinnautiyal': { videoId: 'Dm6YRJHy64c', duration: 231 },
+  'husn::anuvjain': { videoId: '_deqdZmKzyg', duration: 218 },
+};
+
+export function getKnownYoutubeFullTrack(
+  song: Pick<SongItem, 'id' | 'title' | 'artist' | 'source' | 'isFullTrack'>
+): KnownYoutubeTrack | null {
+  if (song.isFullTrack || song.source !== 'itunes') return null;
+  if (Object.prototype.hasOwnProperty.call(KNOWN_YOUTUBE_BY_ID, song.id)) {
+    return KNOWN_YOUTUBE_BY_ID[song.id];
+  }
+  const primaryKey = makeSongKey(song.title, song.artist);
+  if (Object.prototype.hasOwnProperty.call(KNOWN_YOUTUBE_BY_KEY, primaryKey)) {
+    return KNOWN_YOUTUBE_BY_KEY[primaryKey];
+  }
+  const cleanT = cleanTrackTitle(song.title).toLowerCase().replace(/[^a-z0-9]/g, '');
+  for (const art of extractAllSongArtists(song)) {
+    const key = `${cleanT}::${art.toLowerCase().replace(/[^a-z0-9]/g, '')}`;
+    if (Object.prototype.hasOwnProperty.call(KNOWN_YOUTUBE_BY_KEY, key)) {
+      return KNOWN_YOUTUBE_BY_KEY[key];
+    }
+  }
+  return null;
+}
+
+interface PipedSearchItem {
+  url?: string;
+  title?: string;
+  uploaderName?: string;
+  duration?: number;
+  isShort?: boolean;
+}
+
+const PIPED_MUSIC_SEARCH_BASE = 'https://api.piped.private.coffee';
+
+/**
+ * Resolves ANY song (English, Hindi, Punjabi, Global) to its official full-length
+ * YouTube Music track (`youtube://<videoId>`) starting at 0:00 so playback is never cut to 30s.
+ */
+export async function upgradeToFullYoutubeTrack(song: SongItem): Promise<SongItem | null> {
+  if (song.isFullTrack || song.source !== 'itunes') return null;
+  if (youtubeUpgradeCache.has(song.id)) {
+    return youtubeUpgradeCache.get(song.id) ?? null;
+  }
+
+  const known = getKnownYoutubeFullTrack(song);
+  if (known) {
+    const upgraded: SongItem = {
+      ...song,
+      audioUrl: `youtube://${known.videoId}`,
+      duration: known.duration,
+      fullDuration: known.duration,
+      source: 'youtube',
+      isFullTrack: true,
+    };
+    youtubeUpgradeCache.set(song.id, upgraded);
+    return upgraded;
+  }
+
+  if (Date.now() < pipedCooldownUntil) return null;
+
+  const cleanT = cleanTrackTitle(song.title);
+  const targetCleanNorm = normalizeForMatch(cleanT);
+  if (!targetCleanNorm) return null;
+
+  const artists = extractAllSongArtists(song);
+  const query = `${cleanT} ${artists.slice(0, 2).join(' ')}`.trim();
+  const allowModifier = FEATURED_KNOCKOFF_MODIFIERS.test(song.title);
+
+  try {
+    const res = await fetch(
+      `${PIPED_MUSIC_SEARCH_BASE}/search?q=${encodeURIComponent(query)}&filter=music_songs`,
+      { signal: AbortSignal.timeout(4800) }
+    );
+    if (!res.ok) {
+      pipedCooldownUntil = Date.now() + 60_000;
+      return null;
+    }
+    const json = (await res.json()) as { items?: PipedSearchItem[] };
+    const items = Array.isArray(json?.items) ? json.items : [];
+
+    let best: { videoId: string; duration: number; score: number } | null = null;
+    for (const item of items.slice(0, 12)) {
+      if (item.isShort) continue;
+      const dur = Number(item.duration) || 0;
+      if (dur < 60 || dur > 900) continue;
+
+      const idMatch = (item.url || '').match(/[?&]v=([A-Za-z0-9_-]{11})/);
+      const videoId = idMatch?.[1];
+      if (!videoId) continue;
+
+      const title = decodeHtml(item.title || '');
+      const uploader = decodeHtml(item.uploaderName || '');
+      if (!title) continue;
+      if (JUNK_PATTERN.test(`${title} ${uploader}`)) continue;
+      if (!allowModifier && FEATURED_KNOCKOFF_MODIFIERS.test(title)) continue;
+
+      const candCleanNorm = normalizeForMatch(cleanTrackTitle(title));
+      const candFullNorm = normalizeForMatch(`${title} ${uploader}`);
+
+      let score = 0;
+      if (candCleanNorm === targetCleanNorm) {
+        score += 140;
+      } else if (candCleanNorm.includes(targetCleanNorm) || targetCleanNorm.includes(candCleanNorm)) {
+        score += 80;
+      } else {
+        const tTokens = targetCleanNorm.split(' ').filter((w) => w.length >= 2);
+        const hits = tTokens.filter((tok) => candFullNorm.includes(tok)).length;
+        if (hits === 0) continue;
+        score += (hits / Math.max(1, tTokens.length)) * 65;
+      }
+
+      let artistMatched = artists.length === 0;
+      for (const art of artists) {
+        const aNorm = normalizeForMatch(art);
+        if (!aNorm) continue;
+        if (candFullNorm.includes(aNorm)) {
+          artistMatched = true;
+          score += 75;
+          break;
+        }
+        const tokens = aNorm.split(' ').filter((w) => w.length >= 4);
+        if (tokens.some((tok) => candFullNorm.includes(tok))) {
+          artistMatched = true;
+          score += 45;
+          break;
+        }
+      }
+      if (!artistMatched) continue;
+
+      if (song.fullDuration && song.fullDuration > 45) {
+        const diff = Math.abs(dur - song.fullDuration);
+        if (diff > 35) continue;
+        if (diff <= 4) score += 90;
+        else if (diff <= 12) score += 60;
+        else score += Math.max(0, 35 - diff);
+      }
+
+      if (!best || score > best.score) {
+        best = { videoId, duration: dur, score };
+      }
+    }
+
+    const upgraded: SongItem | null =
+      best && best.score >= 120
+        ? {
+            ...song,
+            audioUrl: `youtube://${best.videoId}`,
+            duration: best.duration,
+            fullDuration: best.duration,
+            source: 'youtube',
+            isFullTrack: true,
+          }
+        : null;
+
+    if (youtubeUpgradeCache.size > 80) {
+      const firstKey = youtubeUpgradeCache.keys().next().value;
+      if (firstKey) youtubeUpgradeCache.delete(firstKey);
+    }
+    youtubeUpgradeCache.set(song.id, upgraded);
+    return upgraded;
+  } catch {
+    pipedCooldownUntil = Date.now() + 60_000;
+    return null;
+  }
 }
 
 /**

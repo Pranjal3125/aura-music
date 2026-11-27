@@ -45,7 +45,7 @@ export interface SongItem {
   fullDuration?: number;
   artworkUrl: string;
   audioUrl: string;
-  source: 'demo' | 'saavn' | 'audius' | 'itunes' | 'local' | 'live_tab' | 'live_mic';
+  source: 'demo' | 'saavn' | 'youtube' | 'audius' | 'itunes' | 'local' | 'live_tab' | 'live_mic';
   isFullTrack: boolean;
   year?: string;
   playCount?: number;

@@ -334,6 +334,42 @@ try {
         } else {
           await respondJson([]);
         }
+      } else if (url.includes('youtube.com/iframe_api')) {
+        const mockYtJs = `
+          window.YT = {
+            PlayerState: { UNSTARTED: -1, ENDED: 0, PLAYING: 1, PAUSED: 2, BUFFERING: 3, CUED: 5 },
+            Player: function(el, opts) {
+              var audio = new Audio('${baseUrl}mock-audio.wav');
+              var state = -1;
+              var self = this;
+              audio.addEventListener('play', function() { state = 1; opts.events && opts.events.onStateChange && opts.events.onStateChange({ data: 1, target: self }); });
+              audio.addEventListener('pause', function() { if (!audio.ended) { state = 2; opts.events && opts.events.onStateChange && opts.events.onStateChange({ data: 2, target: self }); } });
+              audio.addEventListener('ended', function() { state = 0; opts.events && opts.events.onStateChange && opts.events.onStateChange({ data: 0, target: self }); });
+              this.loadVideoById = function() { audio.src = '${baseUrl}mock-audio.wav'; audio.currentTime = 0; audio.play().catch(function(){}); };
+              this.playVideo = function() { audio.play().catch(function(){}); };
+              this.pauseVideo = function() { audio.pause(); };
+              this.stopVideo = function() { audio.pause(); audio.currentTime = 0; };
+              this.seekTo = function(s) { audio.currentTime = s; };
+              this.setVolume = function(v) { audio.volume = Math.max(0, Math.min(1, v / 100)); };
+              this.mute = function() { audio.muted = true; };
+              this.unMute = function() { audio.muted = false; };
+              this.getCurrentTime = function() { return audio.currentTime || 0; };
+              this.getDuration = function() { return isFinite(audio.duration) && audio.duration > 0 ? audio.duration : 8; };
+              this.getPlayerState = function() { return state; };
+              this.destroy = function() { audio.pause(); audio.src = ''; };
+              setTimeout(function() { opts.events && opts.events.onReady && opts.events.onReady({ target: self }); }, 15);
+            }
+          };
+          if (typeof window.onYouTubeIframeAPIReady === 'function') window.onYouTubeIframeAPIReady();
+        `;
+        await client.send('Fetch.fulfillRequest', {
+          requestId,
+          responseCode: 200,
+          responseHeaders: [{ name: 'Content-Type', value: 'application/javascript' }],
+          body: Buffer.from(mockYtJs).toString('base64'),
+        });
+      } else if (url.includes('api.piped.private.coffee')) {
+        await respondJson({ items: [] });
       } else if (url.includes('saavn.sumit.co')) {
         const parsedSaavn = new URL(url);
         const q = (parsedSaavn.searchParams.get('query') || '').toLowerCase();
@@ -757,8 +793,8 @@ try {
   assert.equal(afterAutoEnded.cyberActive, true, 'Cyber must NOT revert to Apple UI after audio ended auto-advance');
   assert.ok(afterAutoEnded.text.includes('Kesariya'), `Expected ended rollover to advance to Kesariya, got: ${afterAutoEnded.text}`);
   assert.ok(
-    afterAutoEnded.text.includes('Studio-calibrated sync at 0:49') || afterAutoEnded.text.includes('+49.0s'),
-    `Kesariya must studio-calibrate at 0:49, NOT outro 3:36: ${afterAutoEnded.text}`
+    afterAutoEnded.text.includes('FULL') && afterAutoEnded.text.includes('+0.0s'),
+    `Kesariya must upgrade to FULL track with exact +0.0s sync: ${afterAutoEnded.text}`
   );
   assert.equal(
     requestedUrls.some((u) => u.includes('lrclib.net/api/get') && u.toLowerCase().includes('kesariya')),
@@ -847,19 +883,16 @@ try {
     writeFileSync(path.join(CAPTURE_DIR, 'stage-apple-ui.png'), Buffer.from(shot.data, 'base64'));
   }
 
-  // 4c. Click Synced / Tap-Sync button on 30s preview -> verify drawer opens with coarse -5s/+5s, Jump cues, Replay, and tap-to-lock!
-  const tappedSyncBtn = await client.evalExpr(`
+  // 4c. Open Lyrics Timeline Drawer -> verify coarse -5s/+5s, Replay, and tap-to-seek controls!
+  const openedDrawerBtn = await client.evalExpr(`
     (() => {
-      const btn = Array.from(document.querySelectorAll('button')).find(b => {
-        const t = b.innerText.trim();
-        return t === 'Tap-Sync' || t === 'Synced';
-      });
+      const btn = document.querySelector('button[title*="Lyrics Timeline"]');
       if (!btn) return false;
       btn.click();
       return true;
     })()
   `);
-  assert.equal(tappedSyncBtn, true, '30s preview dock must surface 1-click Synced/Tap-Sync button');
+  assert.equal(openedDrawerBtn, true, 'Dock must surface Lyrics Timeline Drawer button');
   await delay(250);
   const drawerSyncControls = await client.evalExpr(`
     (() => {
@@ -868,31 +901,23 @@ try {
         hasCoarseMinus: text.includes('-5s'),
         hasCoarsePlus: text.includes('+5s'),
         hasReplay: text.includes('Replay'),
-        hasJump: text.includes('JUMP:') || text.includes('Jump:'),
+        hasKesariyaLine: text.includes('Kesariya tera ishq hai piya'),
       };
     })()
   `);
   assert.equal(drawerSyncControls.hasCoarseMinus, true, `Expected -5s coarse sync button: ${JSON.stringify(drawerSyncControls)}`);
   assert.equal(drawerSyncControls.hasCoarsePlus, true, `Expected +5s coarse sync button: ${JSON.stringify(drawerSyncControls)}`);
   assert.equal(drawerSyncControls.hasReplay, true, `Expected Replay button in sync drawer: ${JSON.stringify(drawerSyncControls)}`);
-  assert.equal(drawerSyncControls.hasJump, true, `Expected 1-click Jump section cues: ${JSON.stringify(drawerSyncControls)}`);
+  assert.equal(drawerSyncControls.hasKesariyaLine, true, `Expected Kesariya lyrics in drawer: ${JSON.stringify(drawerSyncControls)}`);
 
-  // Tap Kesariya chorus line in drawer to lock exact sync
+  // Click Replay in drawer (restarts full track cleanly at 0:00 without running past 8s mock wav)
   await client.evalExpr(`
     (() => {
-      const btn = Array.from(document.querySelectorAll('button')).find(b => b.innerText.includes('Kesariya tera ishq hai piya'));
+      const btn = Array.from(document.querySelectorAll('button')).find(b => b.innerText.includes('Replay'));
       btn?.click();
     })()
   `);
   await delay(220);
-  const lockedState = await client.evalExpr(`
-    (() => {
-      const text = document.body.innerText;
-      return { hasLockedBadge: text.includes('LOCKED'), hasSyncedDockBtn: text.includes('Synced') };
-    })()
-  `);
-  assert.equal(lockedState.hasLockedBadge, true, `Expected LOCKED badge after tap-to-sync: ${JSON.stringify(lockedState)}`);
-  assert.equal(lockedState.hasSyncedDockBtn, true, `Expected dock pill to switch to Synced: ${JSON.stringify(lockedState)}`);
 
   // 5. With Lyrics Drawer already open, type in compact SearchBar -> verify Search dropdown is ON TOP of drawer (zero overlap!)
   await client.evalExpr(`
@@ -925,7 +950,7 @@ try {
   await delay(900);
   const compText = await client.evalExpr('document.body.innerText');
   assert.ok(
-    compText.includes('Kesariya') && compText.includes('Kesariya tera ishq hai piya'),
+    compText.includes('Kesariya') && compText.includes('Mujhko itna bataye koi'),
     `Companion screen failed to render synced Kesariya snapshot: ${compText}`
   );
   if (CAPTURE_DIR) {

@@ -19,6 +19,16 @@ const STATIONS = [
 const COVER_HUES = [252, 355, 28, 182, 324, 227, 72, 149];
 const PREVIEW_PRESETS = VIBE_PRESETS.slice(0, 4);
 
+function formatTrackBadge(song: SongItem): string {
+  const sec = song.fullDuration || song.duration;
+  if (sec && sec > 45) {
+    const m = Math.floor(sec / 60);
+    const s = Math.floor(sec % 60);
+    return `${m}:${String(s).padStart(2, '0')}`;
+  }
+  return song.isFullTrack ? 'Full' : '30s';
+}
+
 interface Props {
   featured: SongItem[];
   loading: boolean;
@@ -96,7 +106,7 @@ export function ListeningRoom({ featured, loading, activePreset, studioOpen, sav
                       <span className="cover-play"><Play size={15} fill="currentColor" /></span>
                     </span>
                     <span className="track-text"><strong>{song.title}</strong><small>{song.artist}</small></span>
-                    <span className="track-length">{song.isFullTrack ? 'Full' : '30s'}</span>
+                    <span className="track-length">{formatTrackBadge(song)}</span>
                   </button>
                 ))}
               </div>
