@@ -718,11 +718,26 @@ try {
       const beat = document.querySelector('.aura-edge-beat-flash');
       const bloom = document.querySelector('.aura-edge-bloom');
       const lumnCanvas = document.querySelector('canvas[data-aura-lumn-canvas="true"]');
+      let redrawPixels = 0;
+      if (lumnCanvas && typeof lumnCanvas.__auraRedraw === 'function') {
+        lumnCanvas.__auraRedraw();
+        const probe = document.createElement('canvas');
+        probe.width = 160;
+        probe.height = 160;
+        const pctx = probe.getContext('2d');
+        if (pctx) {
+          pctx.drawImage(lumnCanvas, 0, 0, 160, 160);
+          const d = pctx.getImageData(0, 0, 160, 10).data;
+          for (let i = 3; i < d.length; i += 4) if (d[i] > 5) redrawPixels++;
+        }
+      }
       return {
         hasLegacyGlowVar: Boolean(rootChild?.style?.getPropertyValue('--aura-glow-alpha')),
         hasLegacyPulseVar: Boolean(rootChild?.style?.getPropertyValue('--aura-pulse-alpha')),
         hasFilmGrain: Boolean(document.querySelector('.aura-film-grain')),
         hasLumnCanvas: Boolean(lumnCanvas && lumnCanvas.width > 0 && lumnCanvas.height > 0),
+        hasRedrawHook: Boolean(lumnCanvas && typeof lumnCanvas.__auraRedraw === 'function'),
+        redrawPixels,
         rimOpacity: rim?.style?.opacity || '',
         beatOpacity: beat?.style?.opacity || '',
         bloomOpacity: bloom?.style?.opacity || '',
@@ -733,8 +748,37 @@ try {
   assert.equal(edgePerfCheck.hasLegacyPulseVar, false, `Legacy root --aura-pulse-alpha must NOT be mutated per frame: ${JSON.stringify(edgePerfCheck)}`);
   assert.equal(edgePerfCheck.hasFilmGrain, false, 'Heavy SVG feTurbulence .aura-film-grain must be removed');
   assert.equal(edgePerfCheck.hasLumnCanvas, true, `GPU LumnEdgeCanvas must be mounted and sized: ${JSON.stringify(edgePerfCheck)}`);
+  assert.equal(edgePerfCheck.hasRedrawHook, true, `LumnEdgeCanvas must expose __auraRedraw for clip export: ${JSON.stringify(edgePerfCheck)}`);
+  assert.ok(edgePerfCheck.redrawPixels > 500, `LumnEdgeCanvas __auraRedraw must populate pixels: ${JSON.stringify(edgePerfCheck)}`);
   assert.ok(parseFloat(edgePerfCheck.rimOpacity) > 0.4, `Leaf .aura-edge-rim must be actively driven via inline opacity: ${JSON.stringify(edgePerfCheck)}`);
   assert.ok(edgePerfCheck.beatOpacity !== '', `Leaf .aura-edge-beat-flash must be wired to rAF: ${JSON.stringify(edgePerfCheck)}`);
+
+  // 4b-mobile. Verify Playing Stage top bar fits 360x640 mobile without clipping the Studio button!
+  await client.send('Emulation.setDeviceMetricsOverride', {
+    width: 360,
+    height: 640,
+    deviceScaleFactor: 1,
+    mobile: true,
+  });
+  await delay(200);
+  await client.evalExpr(`document.body.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 80, clientY: 80 }))`);
+  await delay(150);
+  const mobileStageTopCheck = await client.evalExpr(`
+    (() => {
+      const btn = document.querySelector('button[title="Open AURA Studio"]');
+      const r = btn?.getBoundingClientRect();
+      const hit = r ? document.elementFromPoint(r.left + r.width * 0.5, r.top + r.height * 0.5) : null;
+      return {
+        inViewport: Boolean(r && r.left >= 0 && r.right <= 360),
+        clickable: Boolean(btn && btn.contains(hit)),
+        right: r?.right ?? null,
+      };
+    })()
+  `);
+  assert.equal(mobileStageTopCheck.inViewport, true, `Mobile Playing Stage Studio button clipped off-screen: ${JSON.stringify(mobileStageTopCheck)}`);
+  assert.equal(mobileStageTopCheck.clickable, true, `Mobile Playing Stage Studio button not clickable: ${JSON.stringify(mobileStageTopCheck)}`);
+  await client.send('Emulation.clearDeviceMetricsOverride');
+  await delay(200);
 
   if (CAPTURE_DIR) {
     const shot = await client.send('Page.captureScreenshot', { format: 'png' });

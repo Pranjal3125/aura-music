@@ -117,6 +117,13 @@ export interface CompanionSyncMessage {
   timestamp?: number;
 }
 
+export interface CompanionClearMessage {
+  type: 'STATE_CLEAR';
+  blueprint?: VibeBlueprint;
+}
+
+export type CompanionBroadcastMessage = CompanionSyncMessage | CompanionClearMessage;
+
 export interface CompanionCommandMessage {
   type: 'CMD' | 'COMPANION_HELLO';
   action?: 'toggle_play' | 'prev' | 'next';

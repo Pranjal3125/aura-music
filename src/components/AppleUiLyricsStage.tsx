@@ -75,7 +75,7 @@ const IMessageTail: React.FC<{ className?: string }> = ({ className = 'w-5 h-5' 
 
 const AppleMapsBackdrop: React.FC<{ pinColor: string; secondaryColor: string }> = React.memo(
   ({ pinColor, secondaryColor }) => (
-    <div className="relative w-full h-[126px] sm:h-[144px] overflow-hidden bg-[#0c1424]">
+    <div className="relative w-full h-[106px] sm:h-[144px] overflow-hidden bg-[#0c1424]">
       {/* Stylized 3D Isometric Dark Apple Maps Vector Terrain (GPU translate3d pan only) */}
       <svg
         viewBox="0 0 480 180"
@@ -191,6 +191,7 @@ export const AppleUiLyricsStage: React.FC<AppleUiLyricsStageProps> = React.memo(
   secondsUntilNext,
   phase,
   blueprint,
+  isPlaying,
   visualIcons,
   audioPulseRef,
   onJumpToTime,
@@ -201,39 +202,57 @@ export const AppleUiLyricsStage: React.FC<AppleUiLyricsStageProps> = React.memo(
   const { primary, secondary } = blueprint.palette;
 
   // Ultra-lightweight single compositor loop (strictly 1 card float transform + 1 scaleX bar, quantized!)
+  // Tracks active DOM element identity so newly mounted cards/bars always sync on frame 0 without fighting React props.
   useEffect(() => {
     let rafId = 0;
     let lastSc = -1;
     let lastTy = -999;
     let lastProg = -1;
+    let lastFloatEl: HTMLDivElement | null = null;
+    let lastProgEl: HTMLDivElement | null = null;
     let lastTickMs = 0;
 
     const tick = (now: number) => {
       rafId = requestAnimationFrame(tick);
       if (document.hidden) return;
-      // 60Hz ceiling on DOM card micro-float keeps Blink RecalcStyle near zero while staying silky
-      if (now - lastTickMs < 15) return;
+
+      const curFloat = cardFloatRef.current;
+      const curProg = progressBarRef.current;
+      const nodeSwapped = curFloat !== lastFloatEl || curProg !== lastProgEl;
+
+      // 60Hz ceiling on steady-state DOM writes keeps Blink RecalcStyle near zero while staying silky
+      if (!nodeSwapped && now - lastTickMs < 15) return;
       lastTickMs = now;
+
+      if (curFloat !== lastFloatEl) {
+        lastFloatEl = curFloat;
+        lastSc = -1;
+        lastTy = -999;
+      }
+      if (curProg !== lastProgEl) {
+        lastProgEl = curProg;
+        lastProg = -1;
+      }
 
       const p = audioPulseRef.current;
       const voc = p.vocal ?? p.mid;
       const beat = p.beat;
 
-      if (cardFloatRef.current) {
+      if (curFloat) {
         const sc = Math.round((1 + beat * 0.018 + voc * 0.008) * 160) / 160;
         const ty = Math.round((-beat * 2.4 - voc * 0.8) * 4) / 4;
         if (sc !== lastSc || ty !== lastTy) {
           lastSc = sc;
           lastTy = ty;
-          cardFloatRef.current.style.transform = `translate3d(0, ${ty.toFixed(2)}px, 0) scale(${sc.toFixed(4)})`;
+          curFloat.style.transform = `translate3d(0, ${ty.toFixed(2)}px, 0) scale(${sc.toFixed(4)})`;
         }
       }
 
-      if (progressBarRef.current) {
-        const prog = Math.round(Math.min(1, Math.max(0.03, p.lineProgress ?? 0)) * 120) / 120;
+      if (curProg) {
+        const prog = Math.round(Math.min(1, Math.max(0.03, p.lineProgress ?? 0)) * 180) / 180;
         if (prog !== lastProg) {
           lastProg = prog;
-          progressBarRef.current.style.transform = `scaleX(${prog.toFixed(3)})`;
+          curProg.style.transform = `scaleX(${prog.toFixed(4)})`;
         }
       }
     };
@@ -257,15 +276,16 @@ export const AppleUiLyricsStage: React.FC<AppleUiLyricsStageProps> = React.memo(
   const variant = pickCardVariant(activeLineIdx);
   const wordCount = currentLine?.words.length || 0;
   const wordProgress = wordCount > 0 ? (Math.max(0, activeWordIdx) + 1) / wordCount : 0;
+  const isLongLine = Boolean(currentLine && (currentLine.text.length > 40 || wordCount >= 9));
 
   const [singleWordDone, setSingleWordDone] = useState(false);
   useEffect(() => {
     setSingleWordDone(false);
-    if (variant === 'apple_pay' && wordCount <= 1 && currentLine) {
+    if (variant === 'apple_pay' && wordCount <= 1 && currentLine && isPlaying) {
       const timer = window.setTimeout(() => setSingleWordDone(true), 280);
       return () => window.clearTimeout(timer);
     }
-  }, [variant, activeLineIdx, wordCount, currentLine]);
+  }, [variant, activeLineIdx, wordCount, currentLine, isPlaying]);
 
   const payDone =
     variant === 'apple_pay' &&
@@ -283,7 +303,7 @@ export const AppleUiLyricsStage: React.FC<AppleUiLyricsStageProps> = React.memo(
 
   return (
     <div
-      className="relative z-10 w-full h-full flex flex-col items-center justify-center px-5 sm:px-8 pt-10 pb-16 select-none overflow-hidden font-apple-sf"
+      className="relative z-10 w-full h-full flex flex-col items-center justify-center px-4 sm:px-8 pt-16 pb-36 sm:pt-14 sm:pb-24 select-none overflow-hidden font-apple-sf"
       style={{ contain: 'layout style' }}
     >
       {/* Main Pure-OLED Floating Verci Stage (ZERO surrounding chrome or clutter!) */}
@@ -383,7 +403,9 @@ export const AppleUiLyricsStage: React.FC<AppleUiLyricsStageProps> = React.memo(
                         return (
                           <span
                             key={`${activeLineIdx}-msg-${idx}`}
-                            className={`inline-block text-2xl sm:text-[34px] font-semibold transition-opacity duration-150 ${
+                            className={`inline-block ${
+                              isLongLine ? 'text-xl sm:text-[30px]' : 'text-2xl sm:text-[34px]'
+                            } font-semibold transition-opacity duration-150 ${
                               isAct ? 'animate-word-snap' : ''
                             }`}
                             style={{
@@ -448,7 +470,9 @@ export const AppleUiLyricsStage: React.FC<AppleUiLyricsStageProps> = React.memo(
                         return (
                           <span
                             key={`${activeLineIdx}-map-${idx}`}
-                            className={`inline-block text-2xl sm:text-[31px] font-semibold transition-opacity duration-150 ${
+                            className={`inline-block ${
+                              isLongLine ? 'text-xl sm:text-[28px]' : 'text-2xl sm:text-[31px]'
+                            } font-semibold transition-opacity duration-150 ${
                               isAct ? 'animate-word-snap' : ''
                             }`}
                             style={{
@@ -517,7 +541,7 @@ export const AppleUiLyricsStage: React.FC<AppleUiLyricsStageProps> = React.memo(
                   }}
                 >
                   <div
-                    className="rounded-[23px] px-6 py-5 sm:px-7 sm:py-6 border border-white/[0.14] bg-[#0d0d12] flex items-center justify-between gap-5"
+                    className="rounded-[23px] px-4 py-4 sm:px-7 sm:py-6 border border-white/[0.14] bg-[#0d0d12] flex items-center justify-between gap-4 sm:gap-5"
                     style={{
                       boxShadow: '0 26px 72px rgba(0,0,0,0.96), inset 0 1px 0 rgba(255,255,255,0.14)',
                     }}
@@ -533,7 +557,9 @@ export const AppleUiLyricsStage: React.FC<AppleUiLyricsStageProps> = React.memo(
                           return (
                             <span
                               key={`${activeLineIdx}-pay-${idx}`}
-                              className={`inline-block text-3xl sm:text-[38px] font-semibold transition-opacity duration-150 ${
+                              className={`inline-block ${
+                                isLongLine ? 'text-xl sm:text-[32px]' : 'text-2xl sm:text-[38px]'
+                              } font-semibold transition-opacity duration-150 ${
                                 isAct ? 'animate-word-snap' : ''
                               }`}
                               style={{
@@ -555,7 +581,7 @@ export const AppleUiLyricsStage: React.FC<AppleUiLyricsStageProps> = React.memo(
                     <div className="shrink-0 flex flex-col items-center gap-1 min-w-[54px]">
                       <div
                         key={payDone ? `done-${activeLineIdx}` : `wait-${activeLineIdx}`}
-                        className={`w-12 h-12 rounded-full flex items-center justify-center border-2 transition-colors duration-200 ${
+                        className={`w-11 h-11 sm:w-12 sm:h-12 rounded-full flex items-center justify-center border-2 transition-colors duration-200 ${
                           payDone ? 'animate-pay-done-pop' : ''
                         }`}
                         style={{
@@ -586,21 +612,23 @@ export const AppleUiLyricsStage: React.FC<AppleUiLyricsStageProps> = React.memo(
                   </div>
                 </div>
 
-                {/* ZERO-REFLOW Paired Popping Blue iMessage Reply anchored below-right (matches zoom_05!) */}
-                {payDone && nextLine && (
-                  <div className="absolute right-2 -bottom-[56px] animate-reply-pop pointer-events-none">
-                    <div
-                      className="relative px-4 py-2 rounded-[20px] rounded-br-[6px] text-white text-sm sm:text-base font-medium max-w-[300px]"
-                      style={{
-                        background: 'linear-gradient(160deg, #2898FF 0%, #0A84FF 60%, #006EE6 100%)',
-                        boxShadow: '0 10px 28px rgba(10,132,255,0.42)',
-                      }}
-                    >
-                      <span className="block truncate">{nextLine.text}</span>
-                      <IMessageTail className="absolute -right-[5px] bottom-0 w-4 h-4 fill-[#006EE6]" />
+                {/* ZERO-REFLOW Reserved Slot for Paired Popping Blue iMessage Reply (never collides with bottom dock!) */}
+                <div className="h-[42px] sm:h-[46px] mt-2.5 flex items-start justify-end pr-2 pointer-events-none">
+                  {payDone && nextLine && (
+                    <div className="animate-reply-pop max-w-[92%]">
+                      <div
+                        className="relative px-3.5 sm:px-4 py-1.5 sm:py-2 rounded-[20px] rounded-br-[6px] text-white text-xs sm:text-base font-medium max-w-[270px] sm:max-w-[300px]"
+                        style={{
+                          background: 'linear-gradient(160deg, #2898FF 0%, #0A84FF 60%, #006EE6 100%)',
+                          boxShadow: '0 10px 28px rgba(10,132,255,0.42)',
+                        }}
+                      >
+                        <span className="block truncate">{nextLine.text}</span>
+                        <IMessageTail className="absolute -right-[5px] bottom-0 w-4 h-4 fill-[#006EE6]" />
+                      </div>
                     </div>
-                  </div>
-                )}
+                  )}
+                </div>
               </div>
             )}
 
@@ -626,7 +654,7 @@ export const AppleUiLyricsStage: React.FC<AppleUiLyricsStageProps> = React.memo(
                 )}
 
                 <div
-                  className="w-full min-h-[214px] sm:min-h-[236px] rounded-[24px] p-6 sm:p-7 border border-white/[0.15] relative overflow-hidden flex flex-col justify-between"
+                  className="w-full min-h-[176px] sm:min-h-[236px] rounded-[24px] p-5 sm:p-7 border border-white/[0.15] relative overflow-hidden flex flex-col justify-between"
                   style={{
                     background:
                       'radial-gradient(circle at 78% 22%, rgba(52,211,153,0.09) 0%, rgba(12,12,16,0.98) 48%, #07070a 100%)',
@@ -680,7 +708,9 @@ export const AppleUiLyricsStage: React.FC<AppleUiLyricsStageProps> = React.memo(
                       return (
                         <span
                           key={`${activeLineIdx}-cash-${idx}`}
-                          className={`inline-block text-3xl sm:text-5xl font-bold transition-opacity duration-150 ${
+                          className={`inline-block ${
+                            isLongLine ? 'text-2xl sm:text-4xl' : 'text-3xl sm:text-5xl'
+                          } font-bold transition-opacity duration-150 ${
                             isAct ? 'animate-word-snap' : ''
                           }`}
                           style={{
@@ -713,7 +743,7 @@ export const AppleUiLyricsStage: React.FC<AppleUiLyricsStageProps> = React.memo(
                 className="relative w-full max-w-[448px] flex flex-col items-stretch animate-imessage-pop"
               >
                 <div
-                  className="w-full min-h-[222px] sm:min-h-[246px] rounded-[24px] p-6 sm:p-7 border border-white/40 relative overflow-hidden flex flex-col justify-between text-left"
+                  className="w-full min-h-[176px] sm:min-h-[246px] rounded-[24px] p-5 sm:p-7 border border-white/40 relative overflow-hidden flex flex-col justify-between text-left"
                   style={{
                     background:
                       'radial-gradient(circle at 18% 72%, #86c5f4 0%, transparent 56%), radial-gradient(circle at 54% 38%, #c3a6f7 0%, transparent 58%), radial-gradient(circle at 86% 74%, #f49ec4 0%, transparent 58%), linear-gradient(135deg, #e5eef8 0%, #dcd4f6 52%, #f4d6e8 100%)',
@@ -736,14 +766,16 @@ export const AppleUiLyricsStage: React.FC<AppleUiLyricsStageProps> = React.memo(
                   </div>
 
                   {/* Crisp Dark Graphite SF Pro Lyric Left-Aligned ("fullest extent" in zoom_08!) */}
-                  <div className="relative my-auto py-3 flex flex-wrap items-baseline gap-x-2 gap-y-1 leading-tight">
+                  <div className="relative my-auto py-2.5 sm:py-3 flex flex-wrap items-baseline gap-x-2 gap-y-1 leading-tight">
                     {currentLine.words.map((wd, idx) => {
                       const isAct = idx === activeWordIdx;
                       const isSung = idx < activeWordIdx;
                       return (
                         <span
                           key={`${activeLineIdx}-fr-${idx}`}
-                          className={`inline-block text-2xl sm:text-[34px] font-semibold transition-opacity duration-150 ${
+                          className={`inline-block ${
+                            isLongLine ? 'text-xl sm:text-[30px]' : 'text-2xl sm:text-[34px]'
+                          } font-semibold transition-opacity duration-150 ${
                             isAct ? 'animate-word-snap' : ''
                           }`}
                           style={{
@@ -767,21 +799,23 @@ export const AppleUiLyricsStage: React.FC<AppleUiLyricsStageProps> = React.memo(
                   </div>
                 </div>
 
-                {/* ZERO-REFLOW Paired Vivid Blue iMessage Echo Bubble tucked below-right (matches zoom_09!) */}
-                {nextLine && (
-                  <div className="absolute right-0 -bottom-[58px] animate-reply-pop pointer-events-none">
-                    <div
-                      className="relative px-4 py-2 rounded-[20px] rounded-br-[6px] text-white text-sm sm:text-base font-medium max-w-[290px]"
-                      style={{
-                        background: 'linear-gradient(160deg, #2898FF 0%, #0A84FF 60%, #006EE6 100%)',
-                        boxShadow: '0 10px 28px rgba(10,132,255,0.44)',
-                      }}
-                    >
-                      <span className="block truncate">{nextLine.text}</span>
-                      <IMessageTail className="absolute -right-[5px] bottom-0 w-4 h-4 fill-[#006EE6]" />
+                {/* ZERO-REFLOW Reserved Slot for Paired Vivid Blue iMessage Echo Bubble (never overlaps bottom dock!) */}
+                <div className="h-[42px] sm:h-[46px] mt-2.5 flex items-start justify-end pr-1 pointer-events-none">
+                  {nextLine && (
+                    <div className="animate-reply-pop max-w-[92%]">
+                      <div
+                        className="relative px-3.5 sm:px-4 py-1.5 sm:py-2 rounded-[20px] rounded-br-[6px] text-white text-xs sm:text-base font-medium max-w-[270px] sm:max-w-[290px]"
+                        style={{
+                          background: 'linear-gradient(160deg, #2898FF 0%, #0A84FF 60%, #006EE6 100%)',
+                          boxShadow: '0 10px 28px rgba(10,132,255,0.44)',
+                        }}
+                      >
+                        <span className="block truncate">{nextLine.text}</span>
+                        <IMessageTail className="absolute -right-[5px] bottom-0 w-4 h-4 fill-[#006EE6]" />
+                      </div>
                     </div>
-                  </div>
-                )}
+                  )}
+                </div>
               </div>
             )}
 
@@ -830,7 +864,9 @@ export const AppleUiLyricsStage: React.FC<AppleUiLyricsStageProps> = React.memo(
                       return (
                         <span
                           key={`${activeLineIdx}-mc-${idx}`}
-                          className={`inline-block text-2xl sm:text-[32px] font-semibold transition-opacity duration-150 ${
+                          className={`inline-block ${
+                            isLongLine ? 'text-lg sm:text-[28px]' : 'text-2xl sm:text-[32px]'
+                          } font-semibold transition-opacity duration-150 ${
                             isAct ? 'animate-word-snap' : ''
                           }`}
                           style={{
@@ -848,15 +884,20 @@ export const AppleUiLyricsStage: React.FC<AppleUiLyricsStageProps> = React.memo(
                   </div>
                 </div>
 
-                {/* Bottom Glowing Emerald Progress Capsule with Live Timestamp (matches zoom_01 ⏱ 2:49!) */}
+                {/* Bottom Glowing Emerald Progress Capsule with Live Timestamp (transform owned exclusively by rAF — zero word-tick jitter!) */}
                 <div className="relative h-10 sm:h-11 mx-2 rounded-full overflow-hidden border border-emerald-400/22 bg-[#0a2218]/90 flex items-center justify-center">
                   <div
-                    ref={progressBarRef}
+                    ref={(el) => {
+                      progressBarRef.current = el;
+                      if (el && !el.style.transform) {
+                        const initP = Math.min(1, Math.max(0.03, audioPulseRef.current.lineProgress ?? 0));
+                        el.style.transform = `scaleX(${initP.toFixed(4)})`;
+                      }
+                    }}
                     className="absolute inset-0 origin-left will-change-transform"
                     style={{
                       background:
                         'linear-gradient(90deg, rgba(16,185,129,0.52) 0%, rgba(52,211,153,0.62) 100%)',
-                      transform: `scaleX(${Math.max(0.08, wordProgress).toFixed(3)})`,
                     }}
                   />
                   <div className="relative z-10 flex items-center gap-2 text-xs sm:text-sm font-semibold text-emerald-50/92 tabular-nums px-4 truncate max-w-full">

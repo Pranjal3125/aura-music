@@ -30,6 +30,7 @@ import {
 import type {
   AmbientParticleId,
   AudioPulseState,
+  CompanionClearMessage,
   CompanionCommandMessage,
   CompanionSyncMessage,
   EdgeStyleId,
@@ -69,7 +70,7 @@ import { COMPANION_SNAPSHOT_KEY, CompanionScreen } from './components/CompanionS
 import { LyricsTimelineDrawer } from './components/LyricsTimelineDrawer';
 import { SpectrumHorizon } from './components/SpectrumHorizon';
 import { ClickPulseOverlay } from './components/ClickPulseOverlay';
-import { LumnEdgeCanvas } from './components/LumnEdgeCanvas';
+import { LumnEdgeCanvas, type LumnCanvasElement } from './components/LumnEdgeCanvas';
 import { LYRIC_STYLES, StudioPopover } from './components/StudioPopover';
 
 function fmtTime(sec: number): string {
@@ -842,11 +843,24 @@ const AuraStage: React.FC = () => {
       }
     };
 
+    let lastDiscreteSyncKey = '';
+
     const channel = new BroadcastChannel('aura-vibe-sync');
     channelRef.current = channel;
     channel.onmessage = (ev: MessageEvent<CompanionCommandMessage>) => {
       if (ev.data?.type === 'COMPANION_HELLO') {
         companionLastSeenRef.current = performance.now();
+        lastDiscreteSyncKey = '';
+        if (!rafStateRef.current.activeSong) {
+          try {
+            channel.postMessage({
+              type: 'STATE_CLEAR',
+              blueprint: rafStateRef.current.blueprint,
+            } satisfies CompanionClearMessage);
+          } catch {
+            // ignore
+          }
+        }
         return;
       }
       if (ev.data?.type !== 'CMD') return;
@@ -879,7 +893,6 @@ const AuraStage: React.FC = () => {
     let lastSeekScale = -1;
     let lastTimeStr = '';
     let lastCountdownInt = -1;
-    let lastDiscreteSyncKey = '';
 
     let prevNow = performance.now();
     let lastCompanionMs = 0;
@@ -1068,7 +1081,7 @@ const AuraStage: React.FC = () => {
           curLineIdx >= 0 && curLineIdx + 1 < s.lyrics.length
             ? s.lyrics[curLineIdx + 1]?.text
             : undefined;
-        const discreteKey = `${s.activeSong.id}|${playingNow ? 1 : 0}|${curText}|${s.blueprint.moodName}|${s.blueprint.edgeStyle}|${s.blueprint.palette.primary}`;
+        const discreteKey = `${s.activeSong.id}|${Math.round(durSec)}|${s.activeSong.artworkUrl}|${playingNow ? 1 : 0}|${curText}|${nextText || ''}|${s.blueprint.moodName}|${s.blueprint.edgeStyle}|${s.blueprint.palette.primary}|${s.blueprint.palette.secondary}|${s.blueprint.palette.accent}`;
         const discreteChanged = discreteKey !== lastDiscreteSyncKey;
         const companionActive = now - companionLastSeenRef.current < 8500;
         const shouldBroadcast = discreteChanged || (companionActive && now - lastCompanionMs > 55);
@@ -1203,19 +1216,25 @@ const AuraStage: React.FC = () => {
         ctx.drawImage(specCanvas, (w - sw) * 0.5, h - 88, sw, 84);
       }
 
-      const lumnCanvas = document.querySelector('canvas[data-aura-lumn-canvas="true"]') as HTMLCanvasElement | null;
-      if (lumnCanvas && lumnCanvas.width > 0 && lumnCanvas.height > 0) {
-        ctx.drawImage(lumnCanvas, 0, 0, w, h);
-      } else {
-        const gAlpha = Math.min(0.9, 0.35 + bass * 0.55);
-        ctx.save();
-        ctx.strokeStyle = p;
-        ctx.globalAlpha = gAlpha;
-        ctx.lineWidth = 6;
-        ctx.shadowColor = p;
-        ctx.shadowBlur = 32;
-        ctx.strokeRect(2, 2, w - 4, h - 4);
-        ctx.restore();
+      if (snap.blueprint.edgeStyle !== 'off') {
+        const lumnCanvas = document.querySelector(
+          'canvas[data-aura-lumn-canvas="true"]'
+        ) as LumnCanvasElement | null;
+        if (lumnCanvas && lumnCanvas.width > 0 && lumnCanvas.height > 0) {
+          // Force synchronous draw before drawImage so WebGL2 preserveDrawingBuffer:false never exports a blank frame
+          lumnCanvas.__auraRedraw?.();
+          ctx.drawImage(lumnCanvas, 0, 0, w, h);
+        } else {
+          const gAlpha = Math.min(0.9, 0.35 + bass * 0.55);
+          ctx.save();
+          ctx.strokeStyle = p;
+          ctx.globalAlpha = gAlpha;
+          ctx.lineWidth = 6;
+          ctx.shadowColor = p;
+          ctx.shadowBlur = 32;
+          ctx.strokeRect(2, 2, w - 4, h - 4);
+          ctx.restore();
+        }
       }
 
       requestAnimationFrame(pump);
@@ -1891,7 +1910,7 @@ const AuraStage: React.FC = () => {
         <>
           {/* Elevated Top Bar (sits above drawers & toast when searching!) */}
           <div
-            className={`fixed top-5 inset-x-5 ${searchOpen ? 'z-[88]' : 'z-[60]'} flex items-center justify-between gap-3 transition-all duration-700 ease-apple ${
+            className={`fixed top-4 sm:top-5 inset-x-3 sm:inset-x-5 ${searchOpen ? 'z-[88]' : 'z-[60]'} flex items-center justify-between gap-2 sm:gap-3 transition-all duration-700 ease-apple ${
               chromeVisible && !pureCinema
                 ? 'opacity-100 translate-y-0'
                 : 'opacity-0 -translate-y-4 pointer-events-none'
@@ -1909,8 +1928,17 @@ const AuraStage: React.FC = () => {
                 setLyricsDrawerOpen(false);
                 setSearchOpen(false);
                 setExternalSearchQuery(undefined);
+                try {
+                  channelRef.current?.postMessage({
+                    type: 'STATE_CLEAR',
+                    blueprint: rafStateRef.current.blueprint,
+                  } satisfies CompanionClearMessage);
+                  localStorage.removeItem(COMPANION_SNAPSHOT_KEY);
+                } catch {
+                  // ignore
+                }
               }}
-              className="oled-pill flex items-center gap-2 px-3.5 py-2 rounded-full hover:border-white/25 transition-all cursor-pointer shrink-0 group"
+              className="oled-pill flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3.5 py-1.5 sm:py-2 rounded-full hover:border-white/25 transition-all cursor-pointer shrink-0 group"
               title="Back to Home"
             >
               <span
@@ -1932,8 +1960,9 @@ const AuraStage: React.FC = () => {
             <button
               type="button"
               onClick={() => setVibePanelOpen((v) => !v)}
-              className="oled-pill px-3.5 py-2 rounded-full flex items-center gap-2 text-xs hover:border-white/25 transition-all cursor-pointer shrink-0"
+              className="oled-pill px-2.5 sm:px-3.5 py-1.5 sm:py-2 rounded-full flex items-center gap-1.5 sm:gap-2 text-xs hover:border-white/25 transition-all cursor-pointer shrink-0"
               style={vibePanelOpen ? { borderColor: primary } : undefined}
+              title="Open AURA Studio"
             >
               {isDirecting ? (
                 <Loader2 className="w-3.5 h-3.5 animate-spin" style={{ color: primary }} />
@@ -2137,9 +2166,9 @@ const AuraStage: React.FC = () => {
 
               <div className="flex items-center justify-between gap-2 sm:gap-3">
                 {/* Song Thumbnail + Crisp Title/Artist */}
-                <div className="flex items-center gap-3 min-w-0 flex-1">
+                <div className="flex items-center gap-2.5 sm:gap-3 min-w-0 flex-1">
                   <div
-                    className="w-10 h-10 rounded-lg overflow-hidden bg-zinc-900 shrink-0 border border-white/10"
+                    className="hidden min-[420px]:block w-9 h-9 sm:w-10 sm:h-10 rounded-lg overflow-hidden bg-zinc-900 shrink-0 border border-white/10"
                     style={{ boxShadow: `0 0 16px ${primary}44` }}
                   >
                     {activeSong.artworkUrl ? (
@@ -2152,12 +2181,12 @@ const AuraStage: React.FC = () => {
                   </div>
                   <div className="min-w-0">
                     <div className="flex items-center gap-1.5">
-                      <span className="text-sm font-medium text-white truncate">{activeSong.title}</span>
+                      <span className="text-xs sm:text-sm font-medium text-white truncate">{activeSong.title}</span>
                       <span className="hidden sm:inline text-[9px] font-mono-code px-1.5 py-0.5 rounded bg-white/[0.07] text-white/55 shrink-0">
                         {activeSong.isFullTrack ? 'FULL' : '30s'}
                       </span>
                     </div>
-                    <div className="text-xs text-white/50 truncate">{activeSong.artist}</div>
+                    <div className="text-[11px] sm:text-xs text-white/50 truncate">{activeSong.artist}</div>
                   </div>
                 </div>
 
@@ -2267,7 +2296,7 @@ const AuraStage: React.FC = () => {
                   <button
                     type="button"
                     onClick={() => setLyricsDrawerOpen((v) => !v)}
-                    className={`p-2 rounded-xl transition-colors cursor-pointer ${
+                    className={`p-1.5 sm:p-2 rounded-xl transition-colors cursor-pointer ${
                       lyricsDrawerOpen ? 'text-black' : 'bg-white/[0.06] hover:bg-white/[0.12] text-white/75 hover:text-white'
                     }`}
                     style={lyricsDrawerOpen ? { backgroundColor: primary } : undefined}
@@ -2280,7 +2309,7 @@ const AuraStage: React.FC = () => {
                     type="button"
                     onClick={handleRecordClip}
                     disabled={recordingSec !== null}
-                    className={`p-2 rounded-xl transition-colors cursor-pointer flex items-center gap-1 text-[10px] font-mono-code ${
+                    className={`p-1.5 sm:p-2 rounded-xl transition-colors cursor-pointer flex items-center gap-1 text-[10px] font-mono-code ${
                       recordingSec !== null
                         ? 'bg-red-500 text-white animate-pulse'
                         : 'bg-white/[0.06] hover:bg-white/[0.12] text-white/75 hover:text-white'
@@ -2297,7 +2326,7 @@ const AuraStage: React.FC = () => {
                       e.stopPropagation();
                       setPureCinema(true);
                     }}
-                    className="p-2 rounded-xl bg-white/[0.06] hover:bg-white/[0.12] text-white/75 hover:text-white cursor-pointer"
+                    className="p-1.5 sm:p-2 rounded-xl bg-white/[0.06] hover:bg-white/[0.12] text-white/75 hover:text-white cursor-pointer"
                     title="Pure Zero-UI Cinema Mode (H)"
                   >
                     <EyeOff className="w-4 h-4" />
@@ -2306,7 +2335,7 @@ const AuraStage: React.FC = () => {
                   <button
                     type="button"
                     onClick={openCompanion}
-                    className="p-2 rounded-xl bg-white/[0.06] hover:bg-white/[0.12] text-white/75 hover:text-white cursor-pointer"
+                    className="hidden sm:flex p-2 rounded-xl bg-white/[0.06] hover:bg-white/[0.12] text-white/75 hover:text-white cursor-pointer"
                     title="Dual-Monitor Companion Screen (C)"
                   >
                     <MonitorSmartphone className="w-4 h-4" />
@@ -2315,7 +2344,7 @@ const AuraStage: React.FC = () => {
                   <button
                     type="button"
                     onClick={toggleFullscreen}
-                    className="p-2 rounded-xl bg-white/[0.06] hover:bg-white/[0.12] text-white/75 hover:text-white cursor-pointer"
+                    className="p-1.5 sm:p-2 rounded-xl bg-white/[0.06] hover:bg-white/[0.12] text-white/75 hover:text-white cursor-pointer"
                     title="Fullscreen (F)"
                   >
                     {isFullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}

@@ -231,6 +231,7 @@ test('LyricsStage renders Apple UI intro preview and all 4 Apple UI card archety
     />
   );
   assert.ok(macHtml.includes('macOS Pill'));
+  assert.ok(!macHtml.includes('scaleX('), 'macOS Pill progress bar transform must be owned by rAF ref, not React style prop');
 });
 
 test('LyricsStage renders all 12 lyric visual worlds and manual search fallback when unmatched', () => {
@@ -522,6 +523,7 @@ test('Apple UI Reel choreography renders Apple Maps, Apple Cash, and GPU LumnEdg
     <LumnEdgeCanvas edgeStyle="lumn_vivid" palette={baseBp.palette} audioPulseRef={pulseRef} />
   );
   assert.ok(lumnOn.includes('data-aura-lumn-canvas="true"'));
+  assert.ok(lumnOn.includes('data-aura-lumn-backend="webgl2"'));
 
   const lumnOff = renderToStaticMarkup(
     <LumnEdgeCanvas edgeStyle="off" palette={baseBp.palette} audioPulseRef={pulseRef} />

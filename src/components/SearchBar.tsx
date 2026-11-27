@@ -142,11 +142,11 @@ export const SearchBar: React.FC<SearchBarProps> = React.memo(({
   return (
     <div
       ref={containerRef}
-      className={`relative ${open || focused ? 'z-[80]' : 'z-10'} ${compact ? 'w-[min(64vw,430px)]' : 'w-[min(92vw,600px)]'}`}
+      className={`relative ${open || focused ? 'z-[80]' : 'z-10'} ${compact ? 'flex-1 min-w-0 max-w-[430px]' : 'w-[min(92vw,600px)]'}`}
     >
       <div
-        className={`oled-pill rounded-full flex items-center gap-2.5 transition-all ${
-          compact ? 'px-4 py-2' : 'px-5 py-3.5'
+        className={`oled-pill rounded-full flex items-center gap-2 sm:gap-2.5 transition-all ${
+          compact ? 'px-3 sm:px-4 py-1.5 sm:py-2' : 'px-5 py-3.5'
         }`}
         style={
           open

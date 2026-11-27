@@ -1,6 +1,13 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Disc3, MonitorSmartphone, Pause, Play, SkipBack, SkipForward } from 'lucide-react';
-import type { AudioPulseState, CompanionCommandMessage, CompanionSyncMessage } from '../types';
+import type {
+  AudioPulseState,
+  CompanionBroadcastMessage,
+  CompanionCommandMessage,
+  CompanionSyncMessage,
+  EdgeStyleId,
+  VibePalette,
+} from '../types';
 import { ClickPulseOverlay } from './ClickPulseOverlay';
 import { LumnEdgeCanvas } from './LumnEdgeCanvas';
 
@@ -30,7 +37,7 @@ function discreteKey(d: CompanionSyncMessage): string {
   ].join('|');
 }
 
-const DEFAULT_PALETTE = { primary: '#a855f7', secondary: '#e879f9', accent: '#f5f3ff' };
+const DEFAULT_PALETTE: VibePalette = { primary: '#a855f7', secondary: '#e879f9', accent: '#f5f3ff' };
 
 export const CompanionScreen: React.FC = () => {
   const [sync, setSync] = useState<CompanionSyncMessage | null>(() => {
@@ -41,6 +48,10 @@ export const CompanionScreen: React.FC = () => {
       // ignore
     }
     return null;
+  });
+  const [idleVisual, setIdleVisual] = useState<{ edgeStyle: EdgeStyleId; palette: VibePalette }>({
+    edgeStyle: 'lumn_vivid',
+    palette: DEFAULT_PALETTE,
   });
 
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -79,26 +90,26 @@ export const CompanionScreen: React.FC = () => {
     lastMsgMs: performance.now(),
   });
 
-  const applyPaletteVars = (d: CompanionSyncMessage) => {
+  const applyPaletteVars = (pal: VibePalette) => {
     if (!rootRef.current) return;
     const lp = lastPaletteRef.current;
-    if (d.blueprint.palette.primary !== lp.p) {
-      lp.p = d.blueprint.palette.primary;
+    if (pal.primary !== lp.p) {
+      lp.p = pal.primary;
       rootRef.current.style.setProperty('--aura-primary', lp.p);
     }
-    if (d.blueprint.palette.secondary !== lp.s) {
-      lp.s = d.blueprint.palette.secondary;
+    if (pal.secondary !== lp.s) {
+      lp.s = pal.secondary;
       rootRef.current.style.setProperty('--aura-secondary', lp.s);
     }
-    if (d.blueprint.palette.accent !== lp.a) {
-      lp.a = d.blueprint.palette.accent;
+    if (pal.accent !== lp.a) {
+      lp.a = pal.accent;
       rootRef.current.style.setProperty('--aura-accent', lp.a);
     }
   };
 
   useEffect(() => {
     document.title = 'AURA Companion — Lumn Edge Display';
-    if (sync) applyPaletteVars(sync);
+    if (sync) applyPaletteVars(sync.blueprint.palette);
 
     const channel = new BroadcastChannel('aura-vibe-sync');
     channelRef.current = channel;
@@ -113,10 +124,27 @@ export const CompanionScreen: React.FC = () => {
     announcePresence();
     const helloIv = window.setInterval(announcePresence, 2800);
 
-    channel.onmessage = (ev: MessageEvent<CompanionSyncMessage>) => {
+    channel.onmessage = (ev: MessageEvent<CompanionBroadcastMessage>) => {
+      if (ev.data?.type === 'STATE_CLEAR') {
+        liveTargetsRef.current.isPlaying = false;
+        liveTargetsRef.current.bass = 0.08;
+        liveTargetsRef.current.beat = 0;
+        liveTargetsRef.current.vocal = 0.08;
+        liveTargetsRef.current.energy = 0.08;
+        if (ev.data.blueprint) {
+          applyPaletteVars(ev.data.blueprint.palette);
+          setIdleVisual({
+            edgeStyle: ev.data.blueprint.edgeStyle,
+            palette: ev.data.blueprint.palette,
+          });
+        }
+        lastDiscreteRef.current = '';
+        setSync(null);
+        return;
+      }
       if (ev.data?.type !== 'STATE_SYNC') return;
       const d = ev.data;
-      applyPaletteVars(d);
+      applyPaletteVars(d.blueprint.palette);
 
       liveTargetsRef.current.bass = d.bass;
       liveTargetsRef.current.beat = d.beat;
@@ -180,7 +208,8 @@ export const CompanionScreen: React.FC = () => {
       }
 
       if (tg.duration > 0) {
-        const elapsedSinceMsg = tg.isPlaying ? Math.min(0.4, (now - tg.lastMsgMs) * 0.001) : 0;
+        // Smoothly extrapolate up to 1.8s if the primary window is background-throttled to 1Hz
+        const elapsedSinceMsg = tg.isPlaying ? Math.min(1.8, (now - tg.lastMsgMs) * 0.001) : 0;
         const estSec = Math.min(tg.duration, tg.currentTime + elapsedSinceMsg);
         if (progressFillRef.current) {
           const ratio = Math.round(Math.min(1, Math.max(0, estSec / tg.duration)) * 240) / 240;
@@ -217,10 +246,16 @@ export const CompanionScreen: React.FC = () => {
       <div ref={rootRef} className="relative w-full h-full bg-black flex items-center justify-center p-8 text-center">
         <div className="aura-oled-backdrop" />
         <ClickPulseOverlay />
-        <div className="aura-edge-frame">
-          <LumnEdgeCanvas edgeStyle="lumn_vivid" palette={DEFAULT_PALETTE} audioPulseRef={audioPulseRef} />
-          <div className="aura-edge-rim" />
-        </div>
+        {idleVisual.edgeStyle !== 'off' && (
+          <div className="aura-edge-frame" style={{ opacity: idleVisual.edgeStyle === 'breathing_aura' ? 0.72 : 1 }}>
+            <LumnEdgeCanvas
+              edgeStyle={idleVisual.edgeStyle}
+              palette={idleVisual.palette}
+              audioPulseRef={audioPulseRef}
+            />
+            <div className="aura-edge-rim" />
+          </div>
+        )}
         <div className="relative z-10 oled-surface rounded-[30px] p-8 max-w-md space-y-3 font-apple-sf">
           <MonitorSmartphone className="w-9 h-9 mx-auto text-purple-400" />
           <h1 className="text-xl font-semibold text-white">AURA Companion Display</h1>

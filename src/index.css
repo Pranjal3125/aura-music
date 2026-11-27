@@ -593,3 +593,14 @@ input[type='range'].aura-slider::-webkit-slider-thumb:hover {
   background: rgba(255, 255, 255, 0.16);
   border-radius: 999px;
 }
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-maps-pan,
+  .animate-pin-ripple,
+  .animate-frosted-sheen,
+  .animate-aura-float,
+  .animate-vinyl-spin,
+  .animate-aura-vinyl-pulse {
+    animation: none !important;
+  }
+}
